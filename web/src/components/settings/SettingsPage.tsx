@@ -19,7 +19,7 @@ import { SkillsSection } from "./SkillsSection";
 import { SubAgentsSection } from "./SubAgentsSection";
 import { ToolsSection } from "./ToolsSection";
 
-type SettingsSectionKey =
+export type SettingsSectionKey =
   | "general"
   | "projects"
   | "archive"
@@ -66,11 +66,15 @@ const NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
 interface SettingsPageProps {
   onExit: () => void;
   onChanged?: () => void;
+  /** 初始展示的分区（全局搜索等入口直达用；配合外层 key 重挂载生效）。 */
+  initialSection?: SettingsSectionKey;
 }
 
-export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
+export function SettingsPage({ onExit, onChanged, initialSection }: SettingsPageProps) {
   const t = useT();
-  const [section, setSection] = useState<SettingsSectionKey>("general");
+  const [section, setSection] = useState<SettingsSectionKey>(
+    initialSection ?? "general",
+  );
   const active = NAV_ITEMS.find((item) => item.key === section) ?? NAV_ITEMS[0];
 
   return (

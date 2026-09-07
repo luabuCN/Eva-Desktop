@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react";
+import { PanelRightCloseIcon, PanelRightOpenIcon, Search } from "lucide-react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -47,6 +47,14 @@ import {
 import { cn } from "@/lib/utils";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { AutomationPage } from "./components/automation/AutomationPage";
+import { GlobalSearch, type GlobalSearchSettingsSection } from "./components/GlobalSearch";
+import { ProjectForm } from "./components/settings/ProjectForm";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { lastAssistantHasText } from "./lib/chat-utils";
 
@@ -115,6 +123,8 @@ interface SessionViewProps {
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   panelOpen: boolean;
   onPanelOpenChange: (open: boolean) => void;
+  /** 打开全局搜索命令面板（顶栏搜索按钮，Ctrl+K 同效）。 */
+  onOpenSearch: () => void;
 }
 
 function SessionView({
@@ -139,6 +149,7 @@ function SessionView({
   onReasoningEffortChange,
   panelOpen,
   onPanelOpenChange,
+  onOpenSearch,
 }: SessionViewProps) {
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
@@ -530,6 +541,15 @@ function SessionView({
       >
         <div className="flex min-w-0 items-center gap-1.5">
           <SidebarPeekTrigger />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOpenSearch}
+            title="搜索对话、项目或命令 (Ctrl+K)"
+            aria-label="全局搜索"
+          >
+            <Search className="size-4" />
+          </Button>
           <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
         </div>
         <Button
@@ -630,6 +650,11 @@ export function App() {
     () => localStorage.getItem(AGENT_KEY) ?? undefined,
   );
   const [view, setView] = useState<"chat" | "settings" | "automation">("chat");
+  // 全局搜索（Ctrl+K 命令面板）与它驱动的设置页直达分区。
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [settingsSection, setSettingsSection] =
+    useState<GlobalSearchSettingsSection>("general");
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -709,6 +734,18 @@ export function App() {
   useEffect(() => {
     refreshProviders();
   }, [refreshProviders]);
+
+  // Ctrl/Cmd+K 打开（再按切换关闭）全局搜索面板。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const refreshAgents = useCallback(() => {
     void listAgents()
@@ -826,6 +863,12 @@ export function App() {
     setProjectId(projectId);
     setSessionId(createSessionId());
     setMessages([]);
+  }
+
+  /** 全局搜索/侧栏共用：打开设置页并可直达指定分区（key 重挂载生效）。 */
+  function openSettings(section: GlobalSearchSettingsSection = "general") {
+    setSettingsSection(section);
+    setView("settings");
   }
 
   function handleSelectProject(nextProjectId?: string) {
@@ -948,13 +991,15 @@ export function App() {
         onArchiveProject={(id) => void archiveProject(id)}
         onDeleteProject={(id) => void deleteProject(id)}
         onProjectsChanged={refreshProjects}
-        onOpenSettings={() => setView("settings")}
+        onOpenSettings={() => openSettings()}
         onOpenAutomation={() => setView("automation")}
         automationActive={view === "automation"}
       />
       <SidebarInset className="min-w-0">
         {view === "settings" ? (
           <SettingsPage
+            key={settingsSection}
+            initialSection={settingsSection}
             onExit={() => setView("chat")}
             onChanged={() => {
               refreshProviders();
@@ -993,10 +1038,46 @@ export function App() {
               onFinished={() => void refreshSessions()}
               panelOpen={panelOpen}
               onPanelOpenChange={setPanelOpen}
+              onOpenSearch={() => setSearchOpen(true)}
             />
           </div>
         )}
       </SidebarInset>
+
+      {/* 全局搜索命令面板（Ctrl+K 或侧栏搜索入口打开）。 */}
+      <GlobalSearch
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        sessions={sessions}
+        projects={projects}
+        currentSessionId={sessionId}
+        onNewChat={startNewSession}
+        onNewProject={() => setProjectDialogOpen(true)}
+        onOpenAutomation={() => setView("automation")}
+        onOpenSettings={openSettings}
+        onSelectSession={selectSession}
+        onSelectProject={handleSelectProject}
+      />
+
+      {/* 全局搜索「新项目」命令打开的创建对话框（与侧栏入口同款表单）。 */}
+      <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>添加项目</DialogTitle>
+          </DialogHeader>
+          {projectDialogOpen ? (
+            <ProjectForm
+              onSaved={(project) => {
+                setProjectDialogOpen(false);
+                refreshProjects();
+                handleSelectProject(project.id);
+              }}
+              onCancel={() => setProjectDialogOpen(false)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
       {/* 无边框窗口的自绘控制按钮，固定在窗口右上角、浮于各顶栏之上。 */}
       <WindowControls />
     </SidebarProvider>
