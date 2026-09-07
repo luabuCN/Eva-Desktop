@@ -1,6 +1,7 @@
 import { config } from "../../env.js";
 import { AskUserToolProvider } from "./ask-provider.js";
 import { BuiltinToolProvider } from "./builtin-provider.js";
+import { CronToolProvider } from "./cron-provider.js";
 import { DelegationToolProvider } from "./delegation-provider.js";
 import { GitToolProvider } from "./git-provider.js";
 import { resolveToolPolicies } from "./policies.js";
@@ -34,7 +35,7 @@ export interface ToolDescriptor {
 
 /**
  * A pluggable source of tools (aime-chat's toolkit equivalent). Future
- * providers: MCP servers, knowledge-base search, skill loading, cron control.
+ * providers: MCP servers, knowledge-base search, skill loading.
  */
 export interface ToolProvider {
   /** Stable provider id, e.g. "builtin", "workspace", "mcp", "knowledge". */
@@ -243,3 +244,4 @@ toolProviderRegistry.register(new TaskToolProvider());
 toolProviderRegistry.register(new AskUserToolProvider());
 toolProviderRegistry.register(new DelegationToolProvider());
 toolProviderRegistry.register(new WebSearchToolProvider());
+toolProviderRegistry.register(new CronToolProvider());

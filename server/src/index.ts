@@ -3,6 +3,7 @@ import "./env.js";
 import { app } from "./app.js";
 import { config } from "./env.js";
 import { ensureSchema } from "./db.js";
+import { cronService } from "./runtime/cron-service.js";
 import { toolRecordService } from "./runtime/tools/tool-records.js";
 
 let server: ReturnType<typeof serve>;
@@ -10,6 +11,7 @@ let server: ReturnType<typeof serve>;
 async function main() {
   await ensureSchema();
   await toolRecordService.syncFromRegistry();
+  await cronService.init();
 
   server = serve(
     {

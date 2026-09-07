@@ -1,6 +1,7 @@
 import { isToolUIPart, type FileUIPart, type ReasoningUIPart } from "ai";
 import {
   BotIcon,
+  CalendarClockIcon,
   CheckIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -23,7 +24,7 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
@@ -51,7 +52,10 @@ import { cn } from "@/lib/utils";
 import {
   formatDuration,
   messageText,
+  splitCronContext,
+  stripCronContext,
   type ChatUIMessage,
+  type CronContextInfo,
   type SubagentEventData,
   type ToolPart,
 } from "@/lib/chat-utils";
@@ -89,7 +93,7 @@ function MessageViewBase({
     if (part.type === "text") {
       return (
         <MessageContent key={index}>
-          <MessageResponse>{linkifyUrls(part.text)}</MessageResponse>
+          <MessageResponse>{linkifyUrls(stripCronContext(part.text))}</MessageResponse>
         </MessageContent>
       );
     }
@@ -128,10 +132,13 @@ function MessageViewBase({
         <MessageContent>
           {message.parts.map((part, index) => {
             if (part.type === "text") {
+              // 定时任务发起的回合：剥离 <cron-context> 原始块，换主题色徽标。
+              const { context, text } = splitCronContext(part.text);
               return (
-                <p key={index} className="whitespace-pre-wrap">
-                  {part.text}
-                </p>
+                <Fragment key={index}>
+                  {context ? <CronOriginBadge context={context} /> : null}
+                  {text ? <p className="whitespace-pre-wrap">{text}</p> : null}
+                </Fragment>
               );
             }
             if (part.type === "file") {
@@ -355,6 +362,7 @@ const ACTION_ICONS: Record<ToolAction, typeof WrenchIcon> = {
   task: ListTodoIcon,
   delegate: BotIcon,
   browse: GlobeIcon,
+  cron: CalendarClockIcon,
   use: WrenchIcon,
 };
 
@@ -791,6 +799,24 @@ function SystemNote({ icon, children }: { icon?: ReactNode; children: ReactNode 
       {icon}
       <span className="min-w-0 truncate">{children}</span>
     </div>
+  );
+}
+
+/** 定时任务回合的来源徽标：主题色胶囊 + 时钟图标 + 任务名/触发时间，
+ * 代替消息里原始的 <cron-context> 元数据块。 */
+function CronOriginBadge({ context }: { context: CronContextInfo }) {
+  const startedAt = context.startedAt ? new Date(context.startedAt) : undefined;
+  const timeLabel = startedAt && !Number.isNaN(startedAt.getTime())
+    ? startedAt.toLocaleString()
+    : undefined;
+  return (
+    <span className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+      <CalendarClockIcon className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">定时任务{context.cronName ? ` · ${context.cronName}` : ""}</span>
+      {timeLabel ? (
+        <span className="shrink-0 font-normal text-primary/70">{timeLabel}</span>
+      ) : null}
+    </span>
   );
 }
 

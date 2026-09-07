@@ -3,7 +3,7 @@ import type { ToolPart } from "@/lib/chat-utils";
 /** 动作类别决定一行式工具调用的图标与措辞（参考 PI-Desktop 的 ToolRow）。 */
 export type ToolAction =
   | "read" | "list" | "search" | "write" | "edit" | "run" | "git" | "task"
-  | "delegate" | "browse" | "use";
+  | "delegate" | "browse" | "cron" | "use";
 
 export interface ToolDisplay {
   action: ToolAction;
@@ -95,6 +95,12 @@ const DELEGATE_VERBS: Record<string, string> = {
   DelegateWait: "等待委派",
   DelegateList: "查看委派",
   DelegateStop: "停止委派",
+};
+
+const CRON_VERBS: Record<string, string> = {
+  CronList: "查看定时任务",
+  CronDelete: "删除定时任务",
+  CronRunNow: "立即运行任务",
 };
 
 /** 工具调用的一行式描述：动词随状态（进行中/已完成）变化，摘要取主要参数。 */
@@ -206,6 +212,18 @@ export function describeTool(part: ToolPart): ToolDisplay {
         runningVerb: running("提交"),
         summary: truncateSummary(pickString(input, ["message"]) ?? ""),
       };
+    case "CronCreate":
+    case "CronUpdate": {
+      const cronName = pickString(input, ["name"]);
+      const cron = pickString(input, ["cron"]);
+      return {
+        action: "cron",
+        verb: name === "CronCreate" ? "创建定时任务" : "更新定时任务",
+        runningVerb: name === "CronCreate" ? "正在创建定时任务" : "正在更新定时任务",
+        // 任务名 + 表达式最能说明这次改动
+        summary: truncateSummary([cronName, cron].filter(Boolean).join(" · ")),
+      };
+    }
     default:
       break;
   }
@@ -223,6 +241,14 @@ export function describeTool(part: ToolPart): ToolDisplay {
       action: "task",
       verb: TASK_VERBS[name],
       runningVerb: running(TASK_VERBS[name]),
+      summary: summaryOf(input),
+    };
+  }
+  if (name in CRON_VERBS) {
+    return {
+      action: "cron",
+      verb: CRON_VERBS[name],
+      runningVerb: running(CRON_VERBS[name]),
       summary: summaryOf(input),
     };
   }

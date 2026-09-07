@@ -147,6 +147,41 @@ export function messageText(message: ChatUIMessage): string {
     .join("\n");
 }
 
+/** 定时任务注入的 <cron-context> 块（消息开头，含 cron_name 等元数据）。 */
+export interface CronContextInfo {
+  cronName?: string;
+  startedAt?: string;
+}
+
+const CRON_CONTEXT_RE = /^[ \t]*<cron-context>([\s\S]*?)<\/cron-context>[ \t]*\n?/;
+
+function parseCronContext(body: string): CronContextInfo {
+  const info: CronContextInfo = {};
+  const name = body.match(/^cron_name:[ \t]*(.+)$/m);
+  if (name) info.cronName = name[1].trim();
+  const started = body.match(/^started_at:[ \t]*(.+)$/m);
+  if (started) info.startedAt = started[1].trim();
+  return info;
+}
+
+/**
+ * 拆出文本开头的 <cron-context> 块：展示层用它把原始标记替换为主题色
+ * 徽标。块内是给模型的运行元数据，不应原样出现在气泡里。
+ */
+export function splitCronContext(text: string): {
+  context: CronContextInfo | null;
+  text: string;
+} {
+  const match = text.match(CRON_CONTEXT_RE);
+  if (!match) return { context: null, text };
+  return { context: parseCronContext(match[1]), text: text.slice(match[0].length) };
+}
+
+/** 剥离文本里所有 <cron-context> 块（模型偶尔会复述，气泡里同样不展示）。 */
+export function stripCronContext(text: string): string {
+  return text.replace(/<cron-context>[\s\S]*?<\/cron-context>[ \t]*\n?/g, "").trimStart();
+}
+
 /** Whether the most recent assistant message carries any non-empty text part —
  * a turn that ended with tool calls only gets a "no summary" note. */
 export function lastAssistantHasText(messages: ChatUIMessage[]): boolean {

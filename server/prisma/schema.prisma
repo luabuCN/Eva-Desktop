@@ -66,6 +66,7 @@ model Project {
   updatedAt         DateTime       @updatedAt
   conversations     Conversation[]
   runs              ThreadRun[]
+  crons             CronJob[]
 }
 
 model AgentConfig {
@@ -252,4 +253,30 @@ model FileChange {
   @@index([conversationId, createdAt])
   @@index([projectId, createdAt])
   @@index([runId])
+}
+
+/// 自动化定时任务：到点（croner 按本机时区调度）以机器人身份发起一次
+/// 完整的 agent 运行，产物是普通会话；runHistory 为内嵌 JSON（最近 50 条）。
+model CronJob {
+  id                    String    @id @default(uuid())
+  name                  String    @unique
+  prompt                String
+  cron                  String
+  description           String?
+  projectId             String?
+  project               Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  agentId               String?
+  permissionMode        String    @default("confirm")
+  isActive              Boolean   @default(true)
+  reuseThread           Boolean   @default(false)
+  lastRunAt             DateTime?
+  lastRunEndAt          DateTime?
+  lastRunStatus         String?
+  lastRunError          String?
+  lastRunConversationId String?
+  runHistory            String    @default("[]")
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([isActive])
 }

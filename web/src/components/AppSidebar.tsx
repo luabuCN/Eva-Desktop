@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Archive,
+  CalendarClock,
   ChevronDown,
   Ellipsis,
   Folder,
@@ -80,6 +81,10 @@ export interface AppSidebarProps {
   onDeleteProject: (id: string) => void;
   onProjectsChanged: () => void;
   onOpenSettings: () => void;
+  /** 打开「自动化」定时任务页。 */
+  onOpenAutomation: () => void;
+  /** 当前是否处于自动化页（高亮侧边栏项）。 */
+  automationActive?: boolean;
 }
 
 function CollapsibleGroup({
@@ -248,6 +253,8 @@ export function AppSidebar({
   onDeleteProject,
   onProjectsChanged,
   onOpenSettings,
+  onOpenAutomation,
+  automationActive,
 }: AppSidebarProps) {
   const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
@@ -364,6 +371,15 @@ export function AppSidebar({
               <SidebarMenuButton onClick={() => setProjectFormOpen(true)}>
                 <FolderPlus className="text-muted-foreground" />
                 <span>新项目</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={automationActive}
+                onClick={onOpenAutomation}
+              >
+                <CalendarClock className="text-muted-foreground" />
+                <span>自动化</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

@@ -328,6 +328,37 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "SkillRecord_source_idx" ON "SkillRecord" ("source")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "CronJob" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "name" TEXT NOT NULL,
+      "prompt" TEXT NOT NULL,
+      "cron" TEXT NOT NULL,
+      "description" TEXT,
+      "projectId" TEXT,
+      "agentId" TEXT,
+      "permissionMode" TEXT NOT NULL DEFAULT 'confirm',
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "reuseThread" BOOLEAN NOT NULL DEFAULT false,
+      "lastRunAt" DATETIME,
+      "lastRunEndAt" DATETIME,
+      "lastRunStatus" TEXT,
+      "lastRunError" TEXT,
+      "lastRunConversationId" TEXT,
+      "runHistory" TEXT NOT NULL DEFAULT '[]',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "CronJob_projectId_fkey"
+        FOREIGN KEY ("projectId") REFERENCES "Project"("id")
+        ON DELETE SET NULL ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "CronJob_name_key" ON "CronJob" ("name")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "CronJob_isActive_idx" ON "CronJob" ("isActive")',
+  );
 
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({

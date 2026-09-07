@@ -46,6 +46,7 @@ import {
 } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { SettingsPage } from "./components/settings/SettingsPage";
+import { AutomationPage } from "./components/automation/AutomationPage";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { lastAssistantHasText } from "./lib/chat-utils";
 
@@ -628,7 +629,7 @@ export function App() {
   const [agentId, setAgentId] = useState<string | undefined>(
     () => localStorage.getItem(AGENT_KEY) ?? undefined,
   );
-  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "automation">("chat");
   const [panelOpen, setPanelOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -804,6 +805,8 @@ export function App() {
   function selectSession(id: string, nextProjectId?: string) {
     // 项目分组里的会话把运行上下文切到对应项目；"最近"里的会话一律回到
     // 默认工作区，避免之前选中的项目上下文残留到不相关的对话。
+    // 任何会话选择都意味着回到聊天视图（从自动化/设置页点会话应直接进入）。
+    setView("chat");
     setProjectId(nextProjectId);
     if (id === sessionId) return;
     setSessionId(id);
@@ -812,18 +815,21 @@ export function App() {
 
   // 顶部"新对话"永远开在默认工作区；项目专属的新对话走项目行的 + 按钮。
   function startNewSession() {
+    setView("chat");
     setProjectId(undefined);
     setSessionId(createSessionId());
     setMessages([]);
   }
 
   function startProjectSession(projectId: string) {
+    setView("chat");
     setProjectId(projectId);
     setSessionId(createSessionId());
     setMessages([]);
   }
 
   function handleSelectProject(nextProjectId?: string) {
+    setView("chat");
     setProjectId(nextProjectId);
     const inScope = sessions.filter(
       (session) => (session.projectId ?? undefined) === nextProjectId,
@@ -910,6 +916,17 @@ export function App() {
     void refreshSessions();
   }
 
+  /** 定时任务执行历史 → 打开产物会话：回到聊天视图并带出项目上下文。 */
+  function openConversation(conversationId: string) {
+    const session = sessions.find((candidate) => candidate.id === conversationId);
+    setProjectId(session?.projectId ?? undefined);
+    if (conversationId !== sessionId) {
+      setSessionId(conversationId);
+      setMessages([]);
+    }
+    setView("chat");
+  }
+
   return (
     <SidebarProvider className="h-screen min-w-0 overflow-hidden">
       <AppSidebar
@@ -932,6 +949,8 @@ export function App() {
         onDeleteProject={(id) => void deleteProject(id)}
         onProjectsChanged={refreshProjects}
         onOpenSettings={() => setView("settings")}
+        onOpenAutomation={() => setView("automation")}
+        automationActive={view === "automation"}
       />
       <SidebarInset className="min-w-0">
         {view === "settings" ? (
@@ -943,6 +962,11 @@ export function App() {
               refreshAgents();
               void refreshSessions();
             }}
+          />
+        ) : view === "automation" ? (
+          <AutomationPage
+            onExit={() => setView("chat")}
+            onOpenConversation={openConversation}
           />
         ) : (
           <div className="flex min-h-0 min-w-0 flex-1">

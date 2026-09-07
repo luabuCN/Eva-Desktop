@@ -631,3 +631,84 @@ export function updateProvider(id: string, input: Partial<ProviderInput>): Promi
 export function deleteProvider(id: string): Promise<void> {
   return apiFetch(`/api/providers/${id}`, { method: "DELETE" }).then(() => undefined);
 }
+
+// ---------------------------------------------------------------------------
+// 自动化（定时任务）
+// ---------------------------------------------------------------------------
+
+/** 单次执行的历史记录（内嵌在任务行里，最多保留 50 条）。 */
+export interface CronRunRecordInfo {
+  startedAt: string;
+  endedAt?: string;
+  conversationId?: string;
+  runId?: string;
+  status: "running" | "success" | "failed";
+  error?: string;
+  trigger?: "schedule" | "manual";
+}
+
+export type CronPermissionMode = PermissionMode;
+
+export interface CronJobInfo {
+  id: string;
+  name: string;
+  prompt: string;
+  cron: string;
+  description?: string | null;
+  projectId?: string | null;
+  agentId?: string | null;
+  permissionMode: CronPermissionMode;
+  isActive: boolean;
+  reuseThread: boolean;
+  lastRunAt?: string | null;
+  lastRunEndAt?: string | null;
+  lastRunStatus?: string | null;
+  lastRunError?: string | null;
+  lastRunConversationId?: string | null;
+  runHistory: CronRunRecordInfo[];
+  /** 服务端当前是否正在执行（内存态，随列表返回）。 */
+  isRunning: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CronJobInput {
+  name: string;
+  prompt: string;
+  cron: string;
+  description?: string | null;
+  projectId?: string | null;
+  agentId?: string | null;
+  permissionMode: CronPermissionMode;
+  isActive: boolean;
+  reuseThread: boolean;
+}
+
+export function listCronJobs(): Promise<CronJobInfo[]> {
+  return apiFetch<{ crons: CronJobInfo[] }>("/api/crons").then((data) => data.crons);
+}
+
+export function createCronJob(input: CronJobInput): Promise<CronJobInfo> {
+  return apiFetch<{ cron: CronJobInfo }>("/api/crons", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.cron);
+}
+
+export function updateCronJob(id: string, input: Partial<CronJobInput>): Promise<CronJobInfo> {
+  return apiFetch<{ cron: CronJobInfo }>(`/api/crons/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  }).then((data) => data.cron);
+}
+
+export function deleteCronJob(id: string): Promise<void> {
+  return apiFetch(`/api/crons/${id}`, { method: "DELETE" }).then(() => undefined);
+}
+
+/** 立即触发一次执行（服务端 fire-and-forget，不等待完成）。 */
+export function runCronJobNow(
+  id: string,
+): Promise<{ started: boolean; alreadyRunning: boolean }> {
+  return apiFetch(`/api/crons/${id}/run`, { method: "POST" });
+}
