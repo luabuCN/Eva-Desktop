@@ -1,10 +1,14 @@
 # 发布流水线
 #
-# 触发方式：推送 `vX.Y.Z` 标签（也可以在 Actions 页面手动触发，仅构建不发布）。
+# 触发方式：
+#   1. 推送 `vX.Y.Z` 标签：构建三平台安装包并自动发布 GitHub Release；
+#   2. Actions 页面手动触发（Run workflow）：默认只构建不发布；
+#      在 tag 输入框里填已有标签（如 v1.0.0）则构建并发布/补发到该标签。
+#
 # 发一个版本只需要：
 #
 #   git tag v0.2.0
-#   git push origin v0.2.0        # → 本 workflow 构建三平台安装包并自动发布 GitHub Release
+#   git push origin v0.2.0        # → 构建 + 发布一气呵成
 #
 # 标签里的版本号会自动写入 tauri.conf.json，产物文件名与 Release 版本一致，
 # 无需手动改版本号再提交。
@@ -15,6 +19,11 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布到的标签（如 v1.0.0）；留空则只构建不发布"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -63,11 +72,13 @@ jobs:
             libssl-dev
 
       - name: Sync version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
         run: |
           node --input-type=module - <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
-          const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+          const version = process.env.RELEASE_TAG.replace(/^v/, "");
           const path = "src-tauri/tauri.conf.json";
           const conf = JSON.parse(readFileSync(path, "utf8"));
           conf.version = version;
@@ -115,7 +126,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -125,12 +136,24 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: List artifacts
-        run: ls -la dist/
+      # upload-artifact 会保留 bundle 下的子目录结构（msi/ nsis/ dmg/ deb/ appimage/），
+      # dist/* 只能匹配到目录而非文件；这里先把安装包扁平化到 assets/ 再上传
+      - name: Collect installers
+        run: |
+          find dist -type f | sort
+          mkdir -p assets
+          find dist -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} assets/ \;
+          if [ -z "$(ls -A assets 2>/dev/null)" ]; then
+            echo "::error::no installer files found under dist/"
+            exit 1
+          fi
+          ls -la assets/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          files: assets/*
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_type == 'tag' && github.ref_name || inputs.tag, '-') }}
