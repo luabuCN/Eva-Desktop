@@ -17,6 +17,7 @@ const zh: Record<string, string> = {
   "nav.agents": "Agent",
   "nav.subagents": "子智能体",
   "nav.skills": "技能",
+  "nav.mcp": "MCP",
   "nav.models": "模型",
   "nav.tools": "工具",
 
@@ -60,6 +61,7 @@ const en: Record<string, string> = {
   "nav.agents": "Agent",
   "nav.subagents": "Sub-agents",
   "nav.skills": "Skills",
+  "nav.mcp": "MCP",
   "nav.models": "Models",
   "nav.tools": "Tools",
 

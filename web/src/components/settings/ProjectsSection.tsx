@@ -25,11 +25,11 @@ import { Button } from "@/components/ui/button";
 import { Item, ItemActions, ItemContent, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { ProjectForm } from "./ProjectForm";
 
@@ -163,12 +163,12 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
         )}
       </ScrollArea>
 
-      <Sheet open={formOpen} onOpenChange={setFormOpen}>
-        <SheetContent className="min-w-[600px]">
-          <SheetHeader>
-            <SheetTitle>{editing ? "编辑项目" : "添加项目"}</SheetTitle>
-          </SheetHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>{editing ? "编辑项目" : "添加项目"}</DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {formOpen ? (
               <ProjectForm
                 key={editing?.id ?? "new"}
@@ -181,8 +181,8 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
               />
             ) : null}
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>

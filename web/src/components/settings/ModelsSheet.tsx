@@ -49,12 +49,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 
 type ModelModalities = { input: string[]; output: string[] };
@@ -271,10 +271,10 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="min-w-[560px]">
-          <SheetHeader>
-            <SheetTitle>模型管理 · {provider?.name ?? ""}</SheetTitle>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="flex h-[80vh] max-h-[85vh] flex-col sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>模型管理 · {provider?.name ?? ""}</DialogTitle>
             <div className="flex flex-row gap-2">
               <InputGroup className="flex-1">
                 <InputGroupInput
@@ -301,7 +301,7 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
                 <RefreshCw className={refreshing ? "animate-spin" : undefined} />
               </Button>
             </div>
-          </SheetHeader>
+          </DialogHeader>
 
           {error && (
             <div className="px-4">
@@ -381,17 +381,17 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
               )}
             </div>
           </ScrollArea>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
-      {/* 添加 / 编辑模型：侧边抽屉 */}
-      <Sheet open={editorOpen} onOpenChange={setEditorOpen}>
-        <SheetContent className="min-w-[420px]">
-          <SheetHeader>
-            <SheetTitle>{editorMode === "create" ? "添加模型" : "编辑模型"}</SheetTitle>
-          </SheetHeader>
+      {/* 添加 / 编辑模型：弹窗 */}
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>{editorMode === "create" ? "添加模型" : "编辑模型"}</DialogTitle>
+          </DialogHeader>
           <ScrollArea className="min-h-0 flex-1">
-            <div className="flex flex-col gap-4 px-4">
+            <div className="flex flex-col gap-4">
               <Field>
                 <FieldLabel htmlFor="model-id">
                   模型 ID <span className="text-destructive">*</span>
@@ -478,13 +478,13 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
               </div>
             </div>
           </ScrollArea>
-          <SheetFooter>
+          <DialogFooter>
             <Button onClick={saveEditor} disabled={editorMode === "create" && !editorState.id.trim()}>
               {editorMode === "create" ? "添加" : "保存"}
             </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

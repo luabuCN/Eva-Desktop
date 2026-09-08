@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, ArrowLeft, Bot, BotIcon, Cloud, FolderOpen, Settings, Sparkles, Wrench } from "lucide-react";
+import { Archive, ArrowLeft, Bot, BotIcon, Cable, Cloud, FolderOpen, Settings, Sparkles, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -12,6 +12,7 @@ import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { GeneralSection } from "./GeneralSection";
 import { ArchiveSection } from "./ArchiveSection";
+import { McpSection } from "./McpSection";
 import { ProvidersSection } from "./ProvidersSection";
 import { AgentsSection } from "./AgentsSection";
 import { ProjectsSection } from "./ProjectsSection";
@@ -26,6 +27,7 @@ export type SettingsSectionKey =
   | "agents"
   | "subagents"
   | "skills"
+  | "mcp"
   | "models"
   | "tools";
 
@@ -48,6 +50,7 @@ const NAV_GROUPS: {
       { key: "agents", labelKey: "nav.agents", icon: Bot },
       { key: "subagents", labelKey: "nav.subagents", icon: BotIcon },
       { key: "skills", labelKey: "nav.skills", icon: Sparkles },
+      { key: "mcp", labelKey: "nav.mcp", icon: Cable },
       { key: "models", labelKey: "nav.models", icon: Cloud },
       { key: "tools", labelKey: "nav.tools", icon: Wrench },
     ],
@@ -132,6 +135,7 @@ export function SettingsPage({ onExit, onChanged, initialSection }: SettingsPage
           {section === "agents" ? <AgentsSection onChanged={onChanged} /> : null}
           {section === "subagents" ? <SubAgentsSection /> : null}
           {section === "skills" ? <SkillsSection /> : null}
+          {section === "mcp" ? <McpSection /> : null}
           {section === "models" ? <ProvidersSection onChanged={onChanged} /> : null}
           {section === "tools" ? <ToolsSection /> : null}
         </div>

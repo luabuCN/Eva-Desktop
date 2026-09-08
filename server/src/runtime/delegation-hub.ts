@@ -203,7 +203,7 @@ export class DelegationHub implements DelegationBridge {
       const delegateContext = toolProviderRegistry.deriveContext(this.options.runContext, {
         readOnly: !canMutate,
       });
-      const availableTools = toolProviderRegistry.createToolSet(delegateContext);
+      const availableTools = await toolProviderRegistry.createToolSet(delegateContext);
       const tools = Object.fromEntries(
         definition.tools
           .filter((name) => availableTools[name])

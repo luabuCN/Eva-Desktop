@@ -370,6 +370,89 @@ export function deleteSkill(key: string): Promise<void> {
   return apiFetch(`/api/skills/${encodeURIComponent(key)}`, { method: "DELETE" }).then(() => undefined);
 }
 
+// ---------------------------------------------------------------------------
+// MCP 服务器配置
+// ---------------------------------------------------------------------------
+
+export type McpTransport = "stdio" | "http";
+
+export type McpServerState = "idle" | "connecting" | "ready" | "failed";
+
+export interface McpServerStatus {
+  serverId: string;
+  state: McpServerState;
+  toolCount: number;
+  message?: string;
+  toolNames?: string[];
+  updatedAt: number;
+}
+
+/** 一条 MCP 服务器配置；projectId 为空表示全局级，否则为项目级。 */
+export interface McpServerInfo {
+  id: string;
+  label: string;
+  description: string | null;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
+  enabled: boolean;
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  status?: McpServerStatus;
+}
+
+export interface McpServerInput {
+  label: string;
+  description?: string | null;
+  transport: McpTransport;
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string | null;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+  projectId?: string | null;
+}
+
+export function listMcpServers(): Promise<McpServerInfo[]> {
+  return apiFetch<{ servers: McpServerInfo[] }>("/api/mcp").then((data) => data.servers);
+}
+
+export function createMcpServer(input: McpServerInput & { id: string }): Promise<McpServerInfo> {
+  return apiFetch<{ server: McpServerInfo }>("/api/mcp", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.server);
+}
+
+export function updateMcpServer(id: string, input: McpServerInput): Promise<McpServerInfo> {
+  return apiFetch<{ server: McpServerInfo }>(`/api/mcp/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.server);
+}
+
+export function setMcpServerEnabled(id: string, enabled: boolean): Promise<McpServerInfo> {
+  return apiFetch<{ server: McpServerInfo }>(`/api/mcp/${encodeURIComponent(id)}/enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  }).then((data) => data.server);
+}
+
+export function deleteMcpServer(id: string): Promise<void> {
+  return apiFetch(`/api/mcp/${encodeURIComponent(id)}`, { method: "DELETE" }).then(() => undefined);
+}
+
+export function testMcpServer(id: string): Promise<McpServerStatus> {
+  return apiFetch<{ status: McpServerStatus }>(`/api/mcp/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+  }).then((data) => data.status);
+}
+
 export interface AgentInfo {
   id: string;
   name: string;

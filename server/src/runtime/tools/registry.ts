@@ -4,6 +4,7 @@ import { BuiltinToolProvider } from "./builtin-provider.js";
 import { CronToolProvider } from "./cron-provider.js";
 import { DelegationToolProvider } from "./delegation-provider.js";
 import { GitToolProvider } from "./git-provider.js";
+import { McpToolProvider } from "./mcp-provider.js";
 import { resolveToolPolicies } from "./policies.js";
 import { createRunContext, type RunContext } from "./run-context.js";
 import { TaskToolProvider } from "./task-provider.js";
@@ -34,8 +35,8 @@ export interface ToolDescriptor {
 }
 
 /**
- * A pluggable source of tools (aime-chat's toolkit equivalent). Future
- * providers: MCP servers, knowledge-base search, skill loading.
+ * A pluggable source of tools (aime-chat's toolkit equivalent). Dynamic
+ * providers (MCP) may resolve their tool list asynchronously per run.
  */
 export interface ToolProvider {
   /** Stable provider id, e.g. "builtin", "workspace", "mcp", "knowledge". */
@@ -45,7 +46,7 @@ export interface ToolProvider {
   /** Catalog metadata for every tool this provider can contribute. */
   listTools(): ToolDescriptor[];
   /** Build executable tools for one run. */
-  createTools(run: RunContext): Record<string, RuntimeTool>;
+  createTools(run: RunContext): Record<string, RuntimeTool> | Promise<Record<string, RuntimeTool>>;
 }
 
 async function requestApproval(
@@ -216,11 +217,12 @@ export class ToolProviderRegistry {
 
   /** Merge every provider's tools for one run, filtered by policy and gated
    * by the approval wrapper. This is the single merge point for builtin,
-   * workspace, and future MCP/skill/knowledge tools. */
-  createToolSet(run: RunContext): Record<string, RuntimeTool> {
+   * workspace, and dynamic MCP/skill tools. */
+  async createToolSet(run: RunContext): Promise<Record<string, RuntimeTool>> {
     const tools: Record<string, RuntimeTool> = {};
     for (const provider of this.providers.values()) {
-      for (const [name, tool] of Object.entries(provider.createTools(run))) {
+      const contributed = await provider.createTools(run);
+      for (const [name, tool] of Object.entries(contributed)) {
         const policy = run.policyFor(name);
         if (!policy.enabled) continue;
         tools[name] =
@@ -234,7 +236,7 @@ export class ToolProviderRegistry {
 }
 
 /** Process-wide registry. Providers register once at import; dynamic sources
- * (MCP, skills) will call register()/unregister() at runtime. */
+ * (MCP) pull their live state from their own manager on each call. */
 export const toolProviderRegistry = new ToolProviderRegistry();
 
 toolProviderRegistry.register(new BuiltinToolProvider());
@@ -245,3 +247,4 @@ toolProviderRegistry.register(new AskUserToolProvider());
 toolProviderRegistry.register(new DelegationToolProvider());
 toolProviderRegistry.register(new WebSearchToolProvider());
 toolProviderRegistry.register(new CronToolProvider());
+toolProviderRegistry.register(new McpToolProvider());

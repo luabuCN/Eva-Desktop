@@ -20,6 +20,7 @@
     "@hono/node-server": "^1.6.0",
     "@mastra/ai-sdk": "1.9.1",
     "@mastra/core": "1.61.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@prisma/client": "^6.5.0",
     "ai": "^6.0.97",
     "croner": "^9.0.0",

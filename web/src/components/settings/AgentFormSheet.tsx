@@ -19,12 +19,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -105,13 +105,13 @@ export function AgentFormSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="min-w-[640px]">
-        <SheetHeader>
-          <SheetTitle>{initial ? "编辑 Agent" : "创建 Agent"}</SheetTitle>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>{initial ? "编辑 Agent" : "创建 Agent"}</DialogTitle>
+        </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="agent-name">名称</FieldLabel>
@@ -181,13 +181,13 @@ export function AgentFormSheet({
           </FieldGroup>
         </div>
 
-        <SheetFooter className="mt-0 gap-2 p-4">
+        <DialogFooter className="mt-0 gap-2">
           <Button onClick={() => void save()} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : null}
             保存
           </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

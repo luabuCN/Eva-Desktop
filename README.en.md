@@ -31,6 +31,7 @@ Eva Desktop puts a tool-using AI agent in a native desktop app: read files, edit
 - **Background subagents.** Delegate separable work — wide searches, multi-file changes — to subagents that run in their own context and report back via Delegate / DelegateWait. When a decision is needed, the agent asks you with interactive `askUser` prompts.
 - **Web search out of the box.** `webSearch` / `webFetch` work with zero configuration (keyless Sogou / DuckDuckGo fallback); add a key to upgrade to Tavily / Bocha / Brave / Zhipu.
 - **SKILL.md skills.** Type `/` to open the skill menu. The app also scans your local Claude Code / Codex / cc-switch skill directories, and custom skills can be managed in Settings.
+- **MCP servers.** Add stdio (local process) or HTTP (Streamable HTTP / SSE) servers under **Settings → MCP**, with global / per-project scopes, connection testing, and tool introspection. Enabled servers contribute their tools to the model as `mcp__<server>__<tool>`, governed by the same permission and approval policies as built-in tools.
 - **Projects and sessions.** A multi-project sidebar with pinning, archiving, and renaming for both sessions and projects.
 - **Built-in browser preview.** Preview generated pages and local dev servers inside the app — no window switching.
 - **Reasoning control.** Pick off / low / medium / high reasoning per model support to balance speed and depth.

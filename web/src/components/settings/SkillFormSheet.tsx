@@ -11,12 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -85,13 +85,13 @@ export function SkillFormSheet({ open, onOpenChange, initial, onSaved }: SkillFo
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="min-w-[640px]">
-        <SheetHeader>
-          <SheetTitle>{initial ? `编辑技能 ${initial.name}` : "创建技能"}</SheetTitle>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>{initial ? `编辑技能 ${initial.name}` : "创建技能"}</DialogTitle>
+        </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="skill-name">名称</FieldLabel>
@@ -136,13 +136,13 @@ export function SkillFormSheet({ open, onOpenChange, initial, onSaved }: SkillFo
           </FieldGroup>
         </div>
 
-        <SheetFooter className="mt-0 gap-2 p-4">
+        <DialogFooter className="mt-0 gap-2">
           <Button onClick={() => void save()} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : null}
             保存
           </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

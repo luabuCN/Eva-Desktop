@@ -359,6 +359,29 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "CronJob_isActive_idx" ON "CronJob" ("isActive")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "McpServer" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "label" TEXT NOT NULL,
+      "description" TEXT,
+      "transport" TEXT NOT NULL,
+      "command" TEXT,
+      "args" TEXT NOT NULL DEFAULT '[]',
+      "env" TEXT NOT NULL DEFAULT '{}',
+      "url" TEXT,
+      "headers" TEXT NOT NULL DEFAULT '{}',
+      "enabled" BOOLEAN NOT NULL DEFAULT true,
+      "projectId" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "McpServer_projectId_fkey"
+        FOREIGN KEY ("projectId") REFERENCES "Project"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "McpServer_projectId_idx" ON "McpServer" ("projectId")',
+  );
 
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({

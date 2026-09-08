@@ -153,7 +153,7 @@ class AgentRuntimeService {
         runContext.delegate = delegationHub;
       }
 
-      const tools = toolProviderRegistry.createToolSet(runContext);
+      const tools = await toolProviderRegistry.createToolSet(runContext);
       const maxSteps = mode === "deep" ? 120 : 80;
 
       // 显式推理等级优先；旧客户端的 thinkingMode=deep 视为开启深度思考。

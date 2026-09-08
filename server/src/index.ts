@@ -4,6 +4,7 @@ import { app } from "./app.js";
 import { config } from "./env.js";
 import { ensureSchema } from "./db.js";
 import { cronService } from "./runtime/cron-service.js";
+import { mcpManager } from "./runtime/mcp-manager.js";
 import { toolRecordService } from "./runtime/tools/tool-records.js";
 
 let server: ReturnType<typeof serve>;
@@ -12,6 +13,8 @@ async function main() {
   await ensureSchema();
   await toolRecordService.syncFromRegistry();
   await cronService.init();
+  // 后台预热全局级 MCP 连接：失败只记状态，不阻塞启动。
+  void mcpManager.warmUp();
 
   server = serve(
     {
@@ -39,6 +42,7 @@ async function main() {
 }
 
 function shutdown() {
+  mcpManager.closeAll();
   server?.close();
   process.exit(0);
 }

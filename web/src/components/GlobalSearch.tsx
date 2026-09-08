@@ -4,6 +4,7 @@ import {
   Bot,
   BotIcon,
   CalendarClock,
+  Cable,
   Cloud,
   Folder,
   FolderOpen,
@@ -45,6 +46,7 @@ export type GlobalSearchSettingsSection =
   | "agents"
   | "subagents"
   | "skills"
+  | "mcp"
   | "models"
   | "tools";
 
@@ -353,6 +355,12 @@ export function GlobalSearch({
                 shortcutValue="技能 skills"
                 title="技能"
                 onSelect={() => run(() => onOpenSettings("skills"))}
+              />
+              <ResultItem
+                icon={Cable}
+                shortcutValue="mcp 服务器 mcp servers"
+                title="MCP 服务器"
+                onSelect={() => run(() => onOpenSettings("mcp"))}
               />
               <ResultItem
                 icon={Wrench}

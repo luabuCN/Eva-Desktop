@@ -67,6 +67,29 @@ model Project {
   conversations     Conversation[]
   runs              ThreadRun[]
   crons             CronJob[]
+  mcpServers        McpServer[]
+}
+
+/// 用户配置的 MCP 服务器。projectId 为空表示全局级（所有项目可见），
+/// 否则为项目级（仅该项目内的运行可用）。args/env/headers 存 JSON 字符串。
+model McpServer {
+  id          String   @id
+  label       String
+  description String?
+  /// stdio | http
+  transport   String
+  command     String?
+  args        String   @default("[]")
+  env         String   @default("{}")
+  url         String?
+  headers     String   @default("{}")
+  enabled     Boolean  @default(true)
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
 }
 
 model AgentConfig {

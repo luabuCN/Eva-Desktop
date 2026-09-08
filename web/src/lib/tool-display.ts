@@ -260,5 +260,16 @@ export function describeTool(part: ToolPart): ToolDisplay {
       summary: summaryOf(input),
     };
   }
+  // MCP 工具：mcp__<服务器>__<工具> 拆开显示，比原始全名可读。
+  if (name.startsWith("mcp__")) {
+    const segments = name.split("__");
+    const label = segments.length >= 3 ? `${segments[1]} · ${segments.slice(2).join("_")}` : name;
+    return {
+      action: "use",
+      verb: label,
+      runningVerb: `正在调用 ${label}`,
+      summary: summaryOf(input),
+    };
+  }
   return fallbackDisplay(name, input);
 }
