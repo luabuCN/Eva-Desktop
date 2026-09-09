@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Archive,
+  BookOpen,
   CalendarClock,
   ChevronDown,
   Ellipsis,
@@ -85,6 +86,10 @@ export interface AppSidebarProps {
   onOpenAutomation: () => void;
   /** 当前是否处于自动化页（高亮侧边栏项）。 */
   automationActive?: boolean;
+  /** 打开「知识库」wiki 页。 */
+  onOpenWiki: () => void;
+  /** 当前是否处于知识库页（高亮侧边栏项）。 */
+  wikiActive?: boolean;
 }
 
 function CollapsibleGroup({
@@ -255,6 +260,8 @@ export function AppSidebar({
   onOpenSettings,
   onOpenAutomation,
   automationActive,
+  onOpenWiki,
+  wikiActive,
 }: AppSidebarProps) {
   const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
@@ -380,6 +387,12 @@ export function AppSidebar({
               >
                 <CalendarClock className="text-muted-foreground" />
                 <span>自动化</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton isActive={wikiActive} onClick={onOpenWiki}>
+                <BookOpen className="text-muted-foreground" />
+                <span>知识库</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

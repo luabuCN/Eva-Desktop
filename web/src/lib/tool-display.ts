@@ -157,6 +157,20 @@ export function describeTool(part: ToolPart): ToolDisplay {
         runningVerb: running("搜索"),
         summary: summaryOf(input),
       };
+    case "wikiSearch":
+      return {
+        action: "search",
+        verb: "搜索知识库",
+        runningVerb: running("搜索"),
+        summary: summaryOf(input),
+      };
+    case "wikiRead":
+      return {
+        action: "read",
+        verb: "读取知识库",
+        runningVerb: running("读取"),
+        summary: summaryOf(input),
+      };
     case "webFetch": {
       const url = pickString(input, ["url"]) ?? "";
       return {

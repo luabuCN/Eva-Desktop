@@ -16,9 +16,14 @@ const env = { ...process.env, OPENHARNESS_SKIP_SIDECAR: "1" };
 // installed there but not reachable.
 const cargoBin = path.join(os.homedir(), ".cargo", "bin");
 const cargoFile = path.join(cargoBin, process.platform === "win32" ? "cargo.exe" : "cargo");
-const onPath = (env.PATH ?? "").split(path.delimiter).some((p) => p.toLowerCase() === cargoBin.toLowerCase());
+// Windows env var names are case-insensitive but JS object keys are not — the
+// inherited key is usually "Path", so assigning env.PATH would add a duplicate
+// key that shadows the real PATH in the child's environment block (cmd.exe
+// then only sees .cargo/bin and loses pnpm). Update the existing casing.
+const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+const onPath = (env[pathKey] ?? "").split(path.delimiter).some((p) => p.toLowerCase() === cargoBin.toLowerCase());
 if (!onPath && fs.existsSync(cargoFile)) {
-  env.PATH = `${cargoBin}${path.delimiter}${env.PATH ?? ""}`;
+  env[pathKey] = `${cargoBin}${path.delimiter}${env[pathKey] ?? ""}`;
 }
 
 const child = spawn("pnpm exec tauri dev", {

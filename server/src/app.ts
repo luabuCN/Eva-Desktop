@@ -18,6 +18,7 @@ import { skillRoutes } from "./routes/skills.js";
 import { subAgentRoutes } from "./routes/subagents.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { toolRoutes } from "./routes/tools.js";
+import { wikiRoutes } from "./routes/wiki.js";
 
 const allowedOrigins = new Set(
   [
@@ -63,6 +64,7 @@ app.route("/api/mcp", mcpRoutes);
 app.route("/api/crons", cronRoutes);
 app.route("/api/git", gitRoutes);
 app.route("/api/changes", changeRoutes);
+app.route("/api/wiki", wikiRoutes);
 app.route("/api/chat", chatRoutes);
 // 内置浏览器面板的静态预览（工作区/项目内文件，按原始字节返回）
 app.route("/preview", previewRoutes);

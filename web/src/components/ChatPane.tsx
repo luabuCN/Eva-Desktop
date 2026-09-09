@@ -2,8 +2,11 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
+import { parseWikiHref } from "@/lib/chat-utils";
 import { prepareAttachments } from "@/lib/attachments";
 import {
+  BookMarked,
+  Check,
   CircleAlertIcon,
   ImageIcon,
   InfoIcon,
@@ -44,9 +47,9 @@ import type {
   RunInfo,
   SkillInfo,
 } from "@/api";
-import { listSkills } from "@/api";
+import { ingestConversationToWiki, listSkills } from "@/api";
 import { MessageView } from "./MessageView";
-import { MessageLinkContext } from "./ai-elements/message";
+import { MessageLinkContext, WikiLinkContext } from "./ai-elements/message";
 import { ConversationMinimap } from "./ConversationMinimap";
 import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
@@ -64,6 +67,56 @@ const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 export interface TurnOutcomeNote {
   kind: "failed" | "aborted";
   message: string;
+}
+
+/** 「存入知识库」：把当前会话整体交给 wiki 总结队列（llm-wiki 的 Save to Wiki）。 */
+function SaveToWikiButton({
+  conversationId,
+  projectId,
+  disabled,
+}: {
+  conversationId: string;
+  projectId?: string;
+  disabled: boolean;
+}) {
+  const [state, setState] = useState<"idle" | "saving" | "done" | "error">("idle");
+  useEffect(() => {
+    if (state !== "done" && state !== "error") return;
+    const timer = window.setTimeout(() => setState("idle"), 2_500);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  const save = useCallback(() => {
+    setState("saving");
+    void ingestConversationToWiki(projectId ? `p:${projectId}` : "default", conversationId)
+      .then(() => setState("done"))
+      .catch(() => setState("error"));
+  }, [conversationId, projectId]);
+
+  return (
+    <button
+      type="button"
+      onClick={save}
+      disabled={disabled || state === "saving"}
+      title={
+        state === "done"
+          ? "已加入总结队列"
+          : state === "error"
+            ? "入队失败，请稍后重试"
+            : "把这段对话总结进知识库"
+      }
+      className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+    >
+      {state === "saving" ? (
+        <LoaderCircleIcon className="size-3.5 animate-spin" />
+      ) : state === "done" ? (
+        <Check className="size-3.5 text-emerald-500" />
+      ) : (
+        <BookMarked className="size-3.5" />
+      )}
+      <span className="text-xs">存入知识库</span>
+    </button>
+  );
 }
 
 export interface ChatPaneProps {
@@ -99,6 +152,8 @@ export interface ChatPaneProps {
   turnNote?: TurnOutcomeNote;
   /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
   onOpenLink?: (url: string) => void;
+  /** 聊天内容里的 wiki:// 知识库引用链接点击后跳转知识库对应页面。 */
+  onOpenWikiPage: (scopeId: string, path: string) => void;
   /** 停止按钮：运行与连接解耦后需要走服务端中止 API；缺省退回本地断流。 */
   onStop?: () => void;
 }
@@ -126,6 +181,7 @@ export function ChatPane({
   onAskAnswer,
   turnNote,
   onOpenLink,
+  onOpenWikiPage,
   onStop,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
@@ -179,6 +235,15 @@ export function ChatPane({
       onOpenLink?.(href);
     },
     [onOpenLink],
+  );
+
+  // wiki:// 知识库引用链接：解析 scope 与 path 后跳转知识库页面。
+  const handleWikiLink = useCallback(
+    (href: string) => {
+      const target = parseWikiHref(href);
+      if (target) onOpenWikiPage(target.scopeId, target.path);
+    },
+    [onOpenWikiPage],
   );
 
   // —— 输入框「/技能」斜杠菜单 ——
@@ -306,6 +371,7 @@ export function ChatPane({
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       <MessageLinkContext.Provider value={onOpenLink}>
+      <WikiLinkContext.Provider value={handleWikiLink}>
         <Conversation onClickCapture={handleLinkClickCapture}>
           <ConversationContent className="mx-auto min-h-full w-full max-w-5xl gap-6 py-6">
             {chat.messages.length === 0 ? (
@@ -338,6 +404,7 @@ export function ChatPane({
           <ConversationMinimap messages={chat.messages} />
           <ConversationScrollButton />
         </Conversation>
+      </WikiLinkContext.Provider>
       </MessageLinkContext.Provider>
 
       <div className="shrink-0 px-4 pb-4">
@@ -437,6 +504,11 @@ export function ChatPane({
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
                 <AgentSelector value={agentId} onChange={onAgentChange} />
+                <SaveToWikiButton
+                  conversationId={chat.id}
+                  projectId={projectId}
+                  disabled={chat.messages.length === 0}
+                />
                 <ProjectSelector
                   projects={projects}
                   projectId={projectId}

@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { AutomationPage } from "./components/automation/AutomationPage";
+import { WikiPageView } from "./components/wiki/WikiPage";
 import { GlobalSearch, type GlobalSearchSettingsSection } from "./components/GlobalSearch";
 import { ProjectForm } from "./components/settings/ProjectForm";
 import {
@@ -125,6 +126,8 @@ interface SessionViewProps {
   onPanelOpenChange: (open: boolean) => void;
   /** 打开全局搜索命令面板（顶栏搜索按钮，Ctrl+K 同效）。 */
   onOpenSearch: () => void;
+  /** 聊天里的 wiki:// 链接点击后跳转知识库对应页面。 */
+  onOpenWikiPage: (scopeId: string, path: string) => void;
 }
 
 function SessionView({
@@ -150,6 +153,7 @@ function SessionView({
   panelOpen,
   onPanelOpenChange,
   onOpenSearch,
+  onOpenWikiPage,
 }: SessionViewProps) {
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
@@ -594,6 +598,7 @@ function SessionView({
           }
           turnNote={turnNote}
           onOpenLink={handleOpenLink}
+          onOpenWikiPage={onOpenWikiPage}
           onStop={handleStop}
         />
         {panelOpen ? (
@@ -649,7 +654,18 @@ export function App() {
   const [agentId, setAgentId] = useState<string | undefined>(
     () => localStorage.getItem(AGENT_KEY) ?? undefined,
   );
-  const [view, setView] = useState<"chat" | "settings" | "automation">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "automation" | "wiki">("chat");
+  // 聊天里 wiki:// 链接的跳转目标（nonce 让重复点击同一链接也能重新打开）。
+  const [wikiTarget, setWikiTarget] = useState<{
+    scopeId: string;
+    path: string;
+    nonce: number;
+  } | null>(null);
+  /** 聊天里的知识库引用链接 → 切到知识库视图并打开对应页面。 */
+  const openWikiPage = useCallback((scopeId: string, path: string) => {
+    setWikiTarget({ scopeId, path, nonce: Date.now() });
+    setView("wiki");
+  }, []);
   // 全局搜索（Ctrl+K 命令面板）与它驱动的设置页直达分区。
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
@@ -994,6 +1010,8 @@ export function App() {
         onOpenSettings={() => openSettings()}
         onOpenAutomation={() => setView("automation")}
         automationActive={view === "automation"}
+        onOpenWiki={() => setView("wiki")}
+        wikiActive={view === "wiki"}
       />
       <SidebarInset className="min-w-0">
         {view === "settings" ? (
@@ -1013,6 +1031,8 @@ export function App() {
             onExit={() => setView("chat")}
             onOpenConversation={openConversation}
           />
+        ) : view === "wiki" ? (
+          <WikiPageView onExit={() => setView("chat")} target={wikiTarget} />
         ) : (
           <div className="flex min-h-0 min-w-0 flex-1">
             <SessionView
@@ -1039,6 +1059,7 @@ export function App() {
               panelOpen={panelOpen}
               onPanelOpenChange={setPanelOpen}
               onOpenSearch={() => setSearchOpen(true)}
+              onOpenWikiPage={openWikiPage}
             />
           </div>
         )}

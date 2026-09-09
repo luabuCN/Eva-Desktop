@@ -31,6 +31,36 @@ export interface PreviewOpenData {
   label?: string;
 }
 
+/** 知识库跳转链接目标：wiki://<encodedScopeId>/<encodedPath>。 */
+export interface WikiLinkTarget {
+  scopeId: string;
+  path: string;
+}
+
+/** 解析知识库跳转链接。标准形式 /wiki/<scope>/<path>（以 / 开头才能通过
+ * rehype-harden 的 URL 检查）；兼容旧的 wiki/ 与 wiki:// 前缀。 */
+export function parseWikiHref(href: string): WikiLinkTarget | null {
+  let rest: string | null = null;
+  if (href.startsWith("/wiki/")) rest = href.slice("/wiki/".length);
+  else if (href.startsWith("wiki://")) rest = href.slice("wiki://".length);
+  else if (href.startsWith("wiki/")) rest = href.slice("wiki/".length);
+  if (rest === null) return null;
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return null;
+  try {
+    const scopeId = decodeURIComponent(rest.slice(0, slash));
+    const path = rest
+      .slice(slash + 1)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+    if (!scopeId || !path) return null;
+    return { scopeId, path };
+  } catch {
+    return null;
+  }
+}
+
 /** 委派子智能体的直播事件（data-oh:subagent.*，由 DelegationHub 推送）。 */
 export interface SubagentEventData {
   kind: "start" | "progress" | "done" | "error";

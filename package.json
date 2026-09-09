@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
-    "dev": "concurrently -k -n api,tauri -c cyan,yellow \"pnpm --filter server dev\" \"node scripts/dev-tauri.mjs\"",
+    "dev": "concurrently -k -n api,tauri -c cyan,yellow \"node scripts/dev-api.mjs\" \"node scripts/dev-tauri.mjs\"",
     "dev:api": "pnpm --filter server dev",
     "dev:web": "pnpm --filter web dev",
     "build": "pnpm -r build",

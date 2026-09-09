@@ -38,6 +38,14 @@ model StoredMessage {
   @@index([conversationId, kind, sequence])
 }
 
+/// 服务端键值设置（如 wiki.autoIngest 对话自动总结开关）。表由
+/// ensureSchema() 运行时创建，这里补齐 Prisma Client 映射。
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 model Provider {
   id        String   @id @default(uuid())
   name      String   @unique
@@ -276,6 +284,71 @@ model FileChange {
   @@index([conversationId, createdAt])
   @@index([projectId, createdAt])
   @@index([runId])
+}
+
+/// 知识库页面（llm-wiki 架构：LLM 增量维护的持久 wiki）。scopeId 为
+/// "default"（默认工作区知识库）或 "p:<projectId>"（项目专属知识库）。
+/// path 形如 "entities/react.md"；content 是 markdown 正文；meta 存
+/// frontmatter JSON（tags / sources / related / summary）。
+model WikiPage {
+  id        String   @id @default(uuid())
+  scopeId   String
+  path      String
+  title     String
+  /// overview | index | log | entity | concept | source | query
+  type      String
+  content   String
+  meta      String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([scopeId, path])
+  @@index([scopeId, type])
+}
+
+/// 知识库原文档（llm-wiki 的 raw/sources 层）：上传文档提取的原始全文，
+/// 不可变；sources/ 来源页正文从这里渲染，导出 Obsidian 时也写原文。
+/// 同名重复上传按 (scopeId, filename) 覆盖更新。
+model WikiDocument {
+  id        String   @id @default(uuid())
+  scopeId   String
+  filename  String
+  title     String
+  text      String
+  chars     Int      @default(0)
+  truncated Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([scopeId, filename])
+  @@index([scopeId])
+}
+
+/// 知识库总结任务：对话回合完成后自动入队（或手动触发），串行消费。
+/// fromSeq/toSeq 圈定要总结的 StoredMessage（ui 快照）sequence 区间。
+/// 同一会话的 queued 任务会合并（窗口取并集），避免连续回合逐条调用 LLM。
+/// sourceKind=document 的任务是手动上传文档：payload 存提取文本
+/// （{filename, title, text}），conversationId 为空串。
+model WikiIngestJob {
+  id             String    @id @default(uuid())
+  scopeId        String
+  conversationId String    @default("")
+  projectId      String?
+  fromSeq        Int       @default(0)
+  toSeq          Int       @default(0)
+  /// conversation | document
+  sourceKind     String    @default("conversation")
+  payload        String    @default("{}")
+  /// auto = 回合完成自动入队；manual = 会话内手动保存；rebuild = 从历史会话构建；upload = 手动上传文档
+  trigger        String    @default("auto")
+  status         String    @default("queued")
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+
+  @@index([scopeId, status, createdAt])
+  @@index([conversationId])
 }
 
 /// 自动化定时任务：到点（croner 按本机时区调度）以机器人身份发起一次

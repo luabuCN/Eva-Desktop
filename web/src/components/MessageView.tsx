@@ -93,7 +93,11 @@ function MessageViewBase({
     if (part.type === "text") {
       return (
         <MessageContent key={index}>
-          <MessageResponse>{linkifyUrls(stripCronContext(part.text))}</MessageResponse>
+          {/* 静态（历史/已完成）文本用 mode="static"：跳过流式修补器
+              remend——它会把已完成的链接误判为未闭合语法而改写。 */}
+          <MessageResponse mode={isStreaming ? "streaming" : "static"}>
+            {normalizeWikiLinks(linkifyUrls(stripCronContext(part.text)))}
+          </MessageResponse>
         </MessageContent>
       );
     }
@@ -247,6 +251,16 @@ function collapseSubagentParts(parts: ChatUIMessage["parts"]): RenderablePart[] 
     }
   }
   return out;
+}
+
+/** 模型引用知识库时常把工具返回的 /wiki/<scope>/<path> 链接改写成 wiki/、
+ * wiki:// 等形式——这两种会被 Streamdown 管道里的 sanitize/harden 拦截
+ * （渲染成「[blocked]」）。渲染前统一归一化为 /wiki/ 前缀。 */
+function normalizeWikiLinks(text: string): string {
+  return text.replace(
+    /\]\((wiki:\/\/[^)\s]+|wiki\/[^)\s]+)\)/g,
+    (_match, url: string) => `](/${url.startsWith("wiki://") ? url.slice("wiki://".length) : url})`,
+  );
 }
 
 /** 把消息里的裸 URL 转成 markdown 链接（dev server 地址等），点击后由

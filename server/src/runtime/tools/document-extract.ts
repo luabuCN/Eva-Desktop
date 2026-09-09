@@ -11,6 +11,11 @@ import JSZip from "jszip";
 
 const DOCUMENT_EXTENSIONS = new Set([".pdf", ".docx", ".xlsx", ".pptx"]);
 
+/** 知识库文档上传额外接受的纯文本/标记格式。 */
+const TEXT_DOCUMENT_EXTENSIONS = new Set([
+  ".md", ".markdown", ".txt", ".html", ".htm",
+]);
+
 /** 提取输出的软上限：防止超大文档撑爆工具输出与上下文。 */
 const MAX_EXTRACT_CHARS = 400_000;
 
@@ -27,12 +32,32 @@ export interface ExtractedDocument {
 
 export async function extractDocumentText(filePath: string): Promise<ExtractedDocument> {
   const bytes = await fs.readFile(filePath);
-  const extension = path.extname(filePath).toLowerCase();
+  return extractDocumentTextFromBytes(bytes, filePath);
+}
+
+/**
+ * 上传文档的统一提取入口（知识库 Ingest 用）：md/markdown/txt 原样、
+ * html/htm 剥离标签、pdf/docx/xlsx/pptx 走结构化提取。
+ * 不支持的扩展名抛错，由调用方给出明确提示。
+ */
+export async function extractDocumentTextFromBytes(
+  bytes: Buffer,
+  filename: string,
+): Promise<ExtractedDocument> {
+  const extension = path.extname(filename).toLowerCase();
   let text: string;
   if (extension === ".pdf") {
     text = await extractPdf(bytes);
-  } else {
+  } else if (DOCUMENT_EXTENSIONS.has(extension)) {
     text = await extractOoxml(bytes, extension);
+  } else if (TEXT_DOCUMENT_EXTENSIONS.has(extension)) {
+    text = extension === ".html" || extension === ".htm"
+      ? extractHtml(bytes.toString("utf8"))
+      : bytes.toString("utf8");
+  } else {
+    throw new Error(
+      `不支持的文档类型 ${extension || "(无扩展名)"}：支持 md / txt / html / pdf / docx / xlsx / pptx`,
+    );
   }
   const trimmed = text.replace(/\n{3,}/g, "\n\n").trim();
   const truncated = trimmed.length > MAX_EXTRACT_CHARS;
@@ -40,6 +65,24 @@ export async function extractDocumentText(filePath: string): Promise<ExtractedDo
     text: truncated ? `${trimmed.slice(0, MAX_EXTRACT_CHARS)}\n…（内容过长，已截断）` : trimmed,
     truncated,
   };
+}
+
+/** HTML → 纯文本：丢 script/style/head 噪声，块级标签转换行，解码实体。 */
+function extractHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<head[\s\S]*?<\/head>/gi, "")
+    .replace(/<(?:br|\/p|\/div|\/li|\/tr|\/h[1-6])\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/[ \t]+\n/g, "\n");
 }
 
 async function extractPdf(bytes: Buffer): Promise<string> {

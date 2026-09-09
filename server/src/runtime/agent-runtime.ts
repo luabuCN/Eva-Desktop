@@ -21,6 +21,7 @@ import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
 import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
+import { isAutoIngestEnabled, wikiQueue } from "../wiki/wiki-queue.js";
 import {
   parseToolPermissionMap,
   toolProviderRegistry,
@@ -43,6 +44,18 @@ type ChatModel = Awaited<ReturnType<typeof createModel>>;
 
 function truncateError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 2_000);
+}
+
+/** 最后一条助手消息是否带非空文本（无文字总结的回合不值得入知识库）。 */
+function lastRunHasText(messages: ChatUIMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    return message.parts.some(
+      (part) => part.type === "text" && part.text.trim().length > 0,
+    );
+  }
+  return false;
 }
 
 async function projectDefaults(projectId?: string) {
@@ -314,6 +327,24 @@ class AgentRuntimeService {
           );
           await runService.finish(run.id, isAborted ? "aborted" : "completed");
           releaseOwnership();
+          // 知识库自动总结：回合正常完成且产生了文字总结时入队（串行队列
+          // 后台消费，与聊天流完全解耦；同会话排队任务自动合并窗口）。
+          if (!isAborted && lastRunHasText(finalMessages as ChatUIMessage[])) {
+            void (async () => {
+              try {
+                if (!(await isAutoIngestEnabled())) return;
+                await wikiQueue.enqueueTurn({
+                  conversationId: context.conversationId,
+                  projectId: context.projectId ?? null,
+                  fromSeq: messages.length,
+                  toSeq: finalMessages.length,
+                  trigger: "auto",
+                });
+              } catch (error) {
+                console.error("wiki auto ingest enqueue failed", error);
+              }
+            })();
+          }
         },
         onError: (error) => {
           console.error(error);

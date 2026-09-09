@@ -24,6 +24,9 @@ const baseInstructions =
   "persistent task list, and mark each task in_progress before starting it. Use " +
   "dependencies when order matters. Mark completed only after implementation and " +
   "verification succeed; otherwise keep it in_progress and explain the blocker. " +
+  "For questions about the user's own projects, past conversations, or uploaded " +
+  "documents, search the knowledge base with wikiSearch before answering, and " +
+  "cite the pages you used as markdown links from each result's link field. " +
   "Do not claim to have changed files unless a tool call succeeded. " +
   "Always end the turn with a brief text summary of what you did or found; never " +
   "finish with tool calls alone.";

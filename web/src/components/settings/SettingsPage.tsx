@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, ArrowLeft, Bot, BotIcon, Cable, Cloud, FolderOpen, Settings, Sparkles, Wrench } from "lucide-react";
+import { Archive, ArrowLeft, BookOpen, Bot, BotIcon, Cable, Cloud, FolderOpen, Settings, Sparkles, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -19,6 +19,7 @@ import { ProjectsSection } from "./ProjectsSection";
 import { SkillsSection } from "./SkillsSection";
 import { SubAgentsSection } from "./SubAgentsSection";
 import { ToolsSection } from "./ToolsSection";
+import { WikiSection } from "./WikiSection";
 
 export type SettingsSectionKey =
   | "general"
@@ -29,7 +30,8 @@ export type SettingsSectionKey =
   | "skills"
   | "mcp"
   | "models"
-  | "tools";
+  | "tools"
+  | "wiki";
 
 /** 分组导航（参考 PI-Desktop：偏好 / 智能体 / 工作区）。 */
 const NAV_GROUPS: {
@@ -60,6 +62,7 @@ const NAV_GROUPS: {
     items: [
       { key: "projects", labelKey: "nav.projects", icon: FolderOpen },
       { key: "archive", labelKey: "nav.archive", icon: Archive },
+      { key: "wiki", labelKey: "nav.wiki", icon: BookOpen },
     ],
   },
 ];
@@ -138,6 +141,7 @@ export function SettingsPage({ onExit, onChanged, initialSection }: SettingsPage
           {section === "mcp" ? <McpSection /> : null}
           {section === "models" ? <ProvidersSection onChanged={onChanged} /> : null}
           {section === "tools" ? <ToolsSection /> : null}
+          {section === "wiki" ? <WikiSection /> : null}
         </div>
       </div>
     </section>

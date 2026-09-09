@@ -795,3 +795,237 @@ export function runCronJobNow(
 ): Promise<{ started: boolean; alreadyRunning: boolean }> {
   return apiFetch(`/api/crons/${id}/run`, { method: "POST" });
 }
+
+// ---------------------------------------------------------------------------
+// 知识库（llm-wiki：对话自动沉淀为持久 wiki）
+// ---------------------------------------------------------------------------
+
+export type WikiPageType =
+  | "overview"
+  | "index"
+  | "log"
+  | "entity"
+  | "concept"
+  | "source"
+  | "query";
+
+export interface WikiScopeInfo {
+  id: string;
+  label: string;
+  kind: "default" | "project";
+  projectId?: string | null;
+  pageCount: number;
+  lastUpdatedAt?: string | null;
+}
+
+export interface WikiPageSummary {
+  path: string;
+  title: string;
+  type: WikiPageType;
+  updatedAt: string;
+  summary?: string;
+  tags: string[];
+}
+
+export interface WikiPageMeta {
+  tags?: string[];
+  sources?: string[];
+  related?: string[];
+  summary?: string;
+  documentId?: string;
+  filename?: string;
+  [key: string]: unknown;
+}
+
+/** 知识库原文档（raw 层）：来源页正文展示的原始全文。 */
+export interface WikiDocumentInfo {
+  id: string;
+  filename: string;
+  title: string;
+  text: string;
+  chars: number;
+  truncated: boolean;
+  createdAt: string;
+}
+
+export interface WikiPageDetail extends WikiPageSummary {
+  content: string;
+  meta: WikiPageMeta;
+  links: string[];
+  document?: WikiDocumentInfo;
+}
+
+export interface WikiTreeGroup {
+  type: WikiPageType;
+  label: string;
+  pages: WikiPageSummary[];
+}
+
+/** 目录树「原始资料」分组条目；path 指向对应 sources/ 来源页。 */
+export interface WikiTreeDocument {
+  id: string;
+  filename: string;
+  title: string;
+  path: string;
+  createdAt: string;
+}
+
+export interface WikiTree {
+  scopeId: string;
+  groups: WikiTreeGroup[];
+  totals: { pages: number };
+  documents: WikiTreeDocument[];
+}
+
+export interface WikiGraphData {
+  nodes: Array<{
+    id: string;
+    title: string;
+    type: WikiPageType;
+    community: number;
+    degree: number;
+  }>;
+  edges: Array<{ source: string; target: string; kind: "link" | "source" }>;
+  communities: number;
+  stats: { pages: number; links: number; isolated: number };
+}
+
+export interface WikiSearchHit {
+  path: string;
+  title: string;
+  type: WikiPageType;
+  snippet: string;
+}
+
+export interface WikiJobsInfo {
+  stats: { queued: number; processing: number; failedRecent: number };
+  jobs: Array<{
+    id: string;
+    scopeId: string;
+    conversationId: string;
+    sourceKind?: "conversation" | "document";
+    filename?: string | null;
+    status: "queued" | "processing" | "completed" | "failed";
+    trigger: "auto" | "manual" | "rebuild" | "upload";
+    error?: string | null;
+    createdAt: string;
+    completedAt?: string | null;
+  }>;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 上传文档解析入知识库（md/txt/html/pdf/docx/xlsx/pptx，≤20MB）。 */
+export async function uploadWikiDocument(
+  scopeId: string,
+  file: File,
+): Promise<{ chars: number; truncated: boolean }> {
+  if (file.size > 20 * 1024 * 1024) throw new Error("文件超过 20MB 上限");
+  const contentBase64 = await fileToBase64(file);
+  return apiFetch<{ chars: number; truncated: boolean }>(
+    wikiPath(scopeId, "/ingest/document"),
+    {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, contentBase64 }),
+    },
+  );
+}
+
+function wikiPath(scopeId: string, suffix = ""): string {
+  return `/api/wiki/${encodeURIComponent(scopeId)}${suffix}`;
+}
+
+export function listWikiScopes(): Promise<WikiScopeInfo[]> {
+  return apiFetch<{ scopes: WikiScopeInfo[] }>("/api/wiki/scopes").then((data) => data.scopes);
+}
+
+export interface WikiSettings {
+  /** 对话回合完成后自动总结进知识库。 */
+  autoIngest: boolean;
+  /** 知识库页默认打开的空间（默认知识库或项目知识库）。 */
+  defaultScope: string;
+}
+
+export function fetchWikiSettings(): Promise<WikiSettings> {
+  return apiFetch("/api/wiki/settings");
+}
+
+export function updateWikiSettings(
+  input: Partial<Pick<WikiSettings, "autoIngest" | "defaultScope">>,
+): Promise<WikiSettings> {
+  return apiFetch("/api/wiki/settings", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchWikiTree(scopeId: string): Promise<WikiTree> {
+  return apiFetch(wikiPath(scopeId, "/tree"));
+}
+
+export function fetchWikiPage(scopeId: string, path: string): Promise<WikiPageDetail> {
+  return apiFetch<{ page: WikiPageDetail }>(
+    `${wikiPath(scopeId, "/page")}?path=${encodeURIComponent(path)}`,
+  ).then((data) => data.page);
+}
+
+export function saveWikiPage(
+  scopeId: string,
+  input: { path: string; title: string; type?: WikiPageType; content: string },
+): Promise<WikiPageDetail> {
+  return apiFetch<{ page: WikiPageDetail }>(wikiPath(scopeId, "/page"), {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.page);
+}
+
+export function deleteWikiPage(scopeId: string, path: string): Promise<void> {
+  return apiFetch(
+    `${wikiPath(scopeId, "/page")}?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  ).then(() => undefined);
+}
+
+export function fetchWikiGraph(scopeId: string): Promise<WikiGraphData> {
+  return apiFetch(wikiPath(scopeId, "/graph"));
+}
+
+export function searchWiki(scopeId: string, query: string): Promise<WikiSearchHit[]> {
+  return apiFetch<{ hits: WikiSearchHit[] }>(
+    `${wikiPath(scopeId, "/search")}?q=${encodeURIComponent(query)}`,
+  ).then((data) => data.hits);
+}
+
+/** 手动把整个会话存入知识库（对话里的「存入知识库」按钮）。 */
+export function ingestConversationToWiki(
+  scopeId: string,
+  conversationId: string,
+): Promise<void> {
+  return apiFetch(
+    wikiPath(scopeId, `/ingest/conversations/${encodeURIComponent(conversationId)}`),
+    { method: "POST" },
+  ).then(() => undefined);
+}
+
+/** 从历史会话批量构建知识库（项目 wiki 初次生成）。 */
+export function rebuildWiki(scopeId: string): Promise<{ enqueued: number }> {
+  return apiFetch(wikiPath(scopeId, "/rebuild"), { method: "POST" });
+}
+
+export function fetchWikiJobs(): Promise<WikiJobsInfo> {
+  return apiFetch("/api/wiki/jobs");
+}
+
+export function wikiExportUrl(scopeId: string): string {
+  return `${API_URL}${wikiPath(scopeId, "/export")}`;
+}

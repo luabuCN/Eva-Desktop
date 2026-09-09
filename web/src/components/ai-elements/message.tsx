@@ -28,7 +28,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Streamdown } from "streamdown";
+import { defaultUrlTransform, Streamdown, type UrlTransform } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -330,12 +330,37 @@ export const MessageLinkContext = createContext<((url: string) => void) | undefi
   undefined,
 );
 
+/** 知识库跳转链接（wiki://<scopeId>/<path>）的打开方式，同样由外层注入。 */
+export const WikiLinkContext = createContext<((href: string) => void) | undefined>(
+  undefined,
+);
+
 const StreamdownLink = ({
   href,
   children,
   ...props
 }: ComponentProps<"a">) => {
   const openLink = useContext(MessageLinkContext);
+  const openWiki = useContext(WikiLinkContext);
+  // 知识库引用链接：模型按工具返回的 link（/wiki/<scope>/<path>）以 markdown
+  // 形式引用，点击跳转知识库对应页面。
+  const isWikiHref = (value: string) =>
+    value.startsWith("/wiki/") || value.startsWith("wiki/") || value.startsWith("wiki://");
+  if (href && isWikiHref(href) && openWiki) {
+    return (
+      <button
+        type="button"
+        data-streamdown="link"
+        className="wrap-anywhere cursor-pointer appearance-none text-left font-medium text-primary underline decoration-primary/40 underline-offset-2"
+        onClick={(event) => {
+          event.preventDefault();
+          openWiki(href);
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
   if (href && /^https?:\/\//i.test(href) && openLink) {
     return (
       <button
@@ -360,6 +385,12 @@ const StreamdownLink = ({
 
 const streamdownComponents = { a: StreamdownLink };
 
+/** 知识库跳转链接放行（/wiki/ 路径及旧格式），其余协议走默认安全变换。 */
+const streamdownUrlTransform: UrlTransform = (url, key, node) =>
+  url.startsWith("/wiki/") || url.startsWith("wiki/") || url.startsWith("wiki://")
+    ? url
+    : defaultUrlTransform(url, key, node);
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
@@ -369,6 +400,10 @@ export const MessageResponse = memo(
       )}
       plugins={streamdownPlugins}
       components={streamdownComponents}
+      // 链接安全弹窗关闭：链接点击统一由 StreamdownLink 处理（http 走内置
+      // 浏览器面板、wiki:// 跳知识库），无需 streamdown 的确认/拦截 UI。
+      linkSafety={{ enabled: false }}
+      urlTransform={streamdownUrlTransform}
       {...props}
     />
   ),

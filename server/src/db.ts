@@ -383,6 +383,75 @@ export async function ensureSchema() {
     'CREATE INDEX IF NOT EXISTS "McpServer_projectId_idx" ON "McpServer" ("projectId")',
   );
 
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "WikiPage" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "scopeId" TEXT NOT NULL,
+      "path" TEXT NOT NULL,
+      "title" TEXT NOT NULL,
+      "type" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "meta" TEXT NOT NULL DEFAULT '{}',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "WikiPage_scopeId_path_key" ON "WikiPage" ("scopeId", "path")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiPage_scopeId_type_idx" ON "WikiPage" ("scopeId", "type")',
+  );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "WikiIngestJob" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "scopeId" TEXT NOT NULL,
+      "conversationId" TEXT NOT NULL DEFAULT '',
+      "projectId" TEXT,
+      "fromSeq" INTEGER NOT NULL DEFAULT 0,
+      "toSeq" INTEGER NOT NULL DEFAULT 0,
+      "sourceKind" TEXT NOT NULL DEFAULT 'conversation',
+      "payload" TEXT NOT NULL DEFAULT '{}',
+      "trigger" TEXT NOT NULL DEFAULT 'auto',
+      "status" TEXT NOT NULL DEFAULT 'queued',
+      "error" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      "completedAt" DATETIME
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "WikiDocument" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "scopeId" TEXT NOT NULL,
+      "filename" TEXT NOT NULL,
+      "title" TEXT NOT NULL,
+      "text" TEXT NOT NULL,
+      "chars" INTEGER NOT NULL DEFAULT 0,
+      "truncated" BOOLEAN NOT NULL DEFAULT false,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "WikiDocument_scopeId_filename_key" ON "WikiDocument" ("scopeId", "filename")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiDocument_scopeId_idx" ON "WikiDocument" ("scopeId")',
+  );
+  await addColumnIfMissing(`
+    ALTER TABLE "WikiIngestJob" ADD COLUMN "sourceKind" TEXT NOT NULL DEFAULT 'conversation'
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "WikiIngestJob" ADD COLUMN "payload" TEXT NOT NULL DEFAULT '{}'
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiIngestJob_scopeId_status_createdAt_idx" ON "WikiIngestJob" ("scopeId", "status", "createdAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiIngestJob_conversationId_idx" ON "WikiIngestJob" ("conversationId")',
+  );
+
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },
@@ -406,6 +475,11 @@ export async function ensureSchema() {
       error: "Interrupted by sidecar restart",
       completedAt: new Date(),
     },
+  });
+  // 服务重启遗留的 processing 总结任务回到队列，避免卡死整个串行队列。
+  await prisma.wikiIngestJob.updateMany({
+    where: { status: "processing" },
+    data: { status: "queued" },
   });
 }
 
