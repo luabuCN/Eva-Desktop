@@ -21,7 +21,7 @@ import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
 import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
-import { isAutoIngestEnabled, wikiQueue } from "../wiki/wiki-queue.js";
+import { isAutoIngestEnabledFor, wikiQueue } from "../wiki/wiki-queue.js";
 import {
   parseToolPermissionMap,
   toolProviderRegistry,
@@ -332,7 +332,7 @@ class AgentRuntimeService {
           if (!isAborted && lastRunHasText(finalMessages as ChatUIMessage[])) {
             void (async () => {
               try {
-                if (!(await isAutoIngestEnabled())) return;
+                if (!(await isAutoIngestEnabledFor(context.projectId))) return;
                 await wikiQueue.enqueueTurn({
                   conversationId: context.conversationId,
                   projectId: context.projectId ?? null,

@@ -3,6 +3,8 @@ import path from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { removeScopeFromDisk } from "../wiki/wiki-files.js";
+import { projectScopeId } from "../wiki/wiki-service.js";
 
 const createProjectSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -11,6 +13,8 @@ const createProjectSchema = z.object({
   defaultAgentId: z.string().trim().min(1).max(100).nullable().optional(),
   defaultProviderId: z.string().trim().min(1).nullable().optional(),
   defaultModelId: z.string().trim().min(1).max(200).nullable().optional(),
+  /** 项目级对话自动总结开关：null = 跟随全局设置。 */
+  wikiAutoIngest: z.boolean().nullable().optional(),
 });
 
 const updateProjectSchema = createProjectSchema.partial().extend({
@@ -139,6 +143,17 @@ projectRoutes.put("/:id", async (c) => {
 });
 
 projectRoutes.delete("/:id", async (c) => {
-  await prisma.project.delete({ where: { id: c.req.param("id") } });
+  const id = c.req.param("id");
+  // 项目删除时连带清理其知识库（页面/原文档/修订/队列任务），否则这些数据
+  // 会因 scope 不可达而永久残留。会话本身保留（projectId 置空），需要时可重建。
+  const scopeId = projectScopeId(id);
+  await prisma.$transaction([
+    prisma.wikiPage.deleteMany({ where: { scopeId } }),
+    prisma.wikiDocument.deleteMany({ where: { scopeId } }),
+    prisma.wikiPageRevision.deleteMany({ where: { scopeId } }),
+    prisma.wikiIngestJob.deleteMany({ where: { scopeId } }),
+    prisma.project.delete({ where: { id } }),
+  ]);
+  void removeScopeFromDisk(scopeId);
   return c.json({ ok: true });
 });

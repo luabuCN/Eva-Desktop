@@ -439,11 +439,51 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "WikiDocument_scopeId_idx" ON "WikiDocument" ("scopeId")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "WikiPageRevision" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "scopeId" TEXT NOT NULL,
+      "path" TEXT NOT NULL,
+      "title" TEXT NOT NULL,
+      "type" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "meta" TEXT NOT NULL DEFAULT '{}',
+      "reason" TEXT NOT NULL DEFAULT 'manual',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiPageRevision_scopeId_path_createdAt_idx" ON "WikiPageRevision" ("scopeId", "path", "createdAt")',
+  );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "WikiChunk" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "scopeId" TEXT NOT NULL,
+      "path" TEXT NOT NULL,
+      "chunkIndex" INTEGER NOT NULL,
+      "text" TEXT NOT NULL,
+      "embedding" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "WikiChunk_scopeId_path_chunkIndex_key" ON "WikiChunk" ("scopeId", "path", "chunkIndex")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "WikiChunk_scopeId_idx" ON "WikiChunk" ("scopeId")',
+  );
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "wikiAutoIngest" BOOLEAN
+  `);
   await addColumnIfMissing(`
     ALTER TABLE "WikiIngestJob" ADD COLUMN "sourceKind" TEXT NOT NULL DEFAULT 'conversation'
   `);
   await addColumnIfMissing(`
     ALTER TABLE "WikiIngestJob" ADD COLUMN "payload" TEXT NOT NULL DEFAULT '{}'
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "WikiDocument" ADD COLUMN "hasFile" BOOLEAN NOT NULL DEFAULT false
   `);
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "WikiIngestJob_scopeId_status_createdAt_idx" ON "WikiIngestJob" ("scopeId", "status", "createdAt")',

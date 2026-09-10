@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   BookMarked,
@@ -7,10 +7,12 @@ import {
   Braces,
   ChevronDown,
   ChevronRight,
+  CornerUpLeft,
   FileText,
   FileUp,
   Folder,
   FolderOpen,
+  History,
   Link2,
   Loader2,
   Network,
@@ -30,9 +32,13 @@ import {
   fetchWikiGraph,
   fetchWikiJobs,
   fetchWikiPage,
+  fetchWikiRevisions,
   fetchWikiSettings,
   fetchWikiTree,
+  importWikiVault,
   listWikiScopes,
+  restoreWikiRevision,
+  retryFailedWikiJobs,
   rebuildWiki,
   saveWikiPage,
   uploadWikiDocument,
@@ -40,6 +46,7 @@ import {
   type WikiJobsInfo,
   type WikiPageDetail,
   type WikiPageSummary,
+  type WikiRevision,
   type WikiScopeInfo,
   type WikiTree,
   type WikiTreeGroup,
@@ -81,6 +88,9 @@ import { WikiGraph } from "./WikiGraph";
 import { cn } from "@/lib/utils";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
+
+/** 原文件预览（@file-viewer + preset-office）较重，打开来源页时才按需加载。 */
+const DocumentFilePreview = lazy(() => import("./DocumentFilePreview"));
 
 /** 侧栏分组：页面类型分组之外，末尾追加「原始资料」（原文档）分组。 */
 type SidebarGroup =
@@ -133,9 +143,25 @@ const TYPE_ICONS: Record<string, typeof FileText> = {
   log: BookOpen,
 };
 
+/** 版本历史来源标签。 */
+const REASON_LABELS: Record<WikiRevision["reason"], string> = {
+  manual: "手动编辑前",
+  ingest: "总结合并前",
+  delete: "删除前",
+  restore: "恢复前",
+};
+
 /** [[wikilink]] 在正文预览里渲染为强调文本（链接跳转由下方 chips 提供）。 */
 function renderWikiMarkdown(content: string): string {
   return content.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_all, target, label) => `**${String(label || target).trim()}**`);
+}
+
+/** 支持原样预览的二进制文档扩展名（服务端上传解析同款集合）。 */
+const FILE_PREVIEW_EXTENSIONS = new Set([".pdf", ".docx", ".xlsx", ".pptx"]);
+
+function documentExtension(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  return dot >= 0 ? filename.slice(dot).toLowerCase() : "";
 }
 
 interface WikiPageViewProps {
@@ -174,8 +200,16 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
   const [uploadState, setUploadState] = useState<"idle" | "uploading">("idle");
   const [uploadNotice, setUploadNotice] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const vaultInputRef = useRef<HTMLInputElement>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const jobsSignatureRef = useRef("");
+  // 版本历史（修订快照）：打开时拉取，恢复后刷新列表。
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [revisions, setRevisions] = useState<WikiRevision[] | null>(null);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  /** 来源页正文视图：原文件预览（默认，原件已落盘时）/ 提取文本。 */
+  const [docView, setDocView] = useState<"file" | "text">("file");
 
   const refreshTree = useCallback((targetScope: string) => {
     void fetchWikiTree(targetScope)
@@ -240,6 +274,9 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
     (path: string, group?: string) => {
       if (!scopeId) return;
       setEditing(false);
+      setHistoryOpen(false);
+      setRevisions(null);
+      setDocView("file");
       setActiveGroup(group ?? null);
       setPageLoading(true);
       void fetchWikiPage(scopeId, path)
@@ -487,6 +524,54 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
     }
   }, [refreshTree, scopeId]);
 
+  /** 打开/关闭版本历史（打开时拉取修订列表）。 */
+  const toggleHistory = useCallback(() => {
+    if (!scopeId || !page) return;
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryOpen(true);
+    setRevisionsLoading(true);
+    void fetchWikiRevisions(scopeId, page.path)
+      .then(setRevisions)
+      .catch((cause: unknown) =>
+        setActionError(cause instanceof Error ? cause.message : "版本历史加载失败"),
+      )
+      .finally(() => setRevisionsLoading(false));
+  }, [historyOpen, page, scopeId]);
+
+  /** 恢复到某次修订：当前内容会先存一份「恢复前」快照，恢复本身可撤销。 */
+  const restoreFromHistory = useCallback(
+    async (revisionId: string) => {
+      if (!scopeId || !page) return;
+      setRestoringId(revisionId);
+      try {
+        const restored = await restoreWikiRevision(scopeId, page.path, revisionId);
+        setPage(restored);
+        refreshTree(scopeId);
+        setGraph(null);
+        setRevisions(await fetchWikiRevisions(scopeId, page.path));
+      } catch (cause) {
+        setActionError(cause instanceof Error ? cause.message : "恢复失败");
+      } finally {
+        setRestoringId(null);
+      }
+    },
+    [page, refreshTree, scopeId],
+  );
+
+  /** 重试全部失败的总结任务并立刻刷新队列状态。 */
+  const retryFailed = useCallback(async () => {
+    try {
+      await retryFailedWikiJobs();
+      jobsSignatureRef.current = "";
+      setJobs(await fetchWikiJobs());
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "重试失败");
+    }
+  }, []);
+
   /** 上传文档 → base64 → 服务端存原文档（立即出现在「来源/原始资料」）并总结。 */
   const handleUpload = useCallback(
     async (file: File | undefined) => {
@@ -508,6 +593,33 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
       }
     },
     [scopeId],
+  );
+
+  /** 导入 Obsidian vault（zip）：.md 按 frontmatter 建页，双链天然兼容。 */
+  const handleImportVault = useCallback(
+    async (file: File | undefined) => {
+      if (!file || !scopeId) return;
+      setUploadState("uploading");
+      setUploadNotice(undefined);
+      try {
+        const result = await importWikiVault(scopeId, file);
+        setUploadNotice(
+          result.imported > 0
+            ? `已从「${file.name}」导入 ${result.imported} 个页面${
+                result.skipped.length > 0 ? `（跳过 ${result.skipped.length} 个非 .md 文件）` : ""
+              }`
+            : "zip 中没有可导入的 .md 文件",
+        );
+        refreshTree(scopeId);
+        setGraph(null);
+      } catch (cause) {
+        setActionError(cause instanceof Error ? cause.message : "导入失败");
+      } finally {
+        setUploadState("idle");
+        if (vaultInputRef.current) vaultInputRef.current.value = "";
+      }
+    },
+    [refreshTree, scopeId],
   );
 
   useEffect(() => {
@@ -558,6 +670,30 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
               void handleUpload(event.target.files?.[0]);
             }}
           />
+          <input
+            ref={vaultInputRef}
+            type="file"
+            accept=".zip"
+            className="hidden"
+            onChange={(event) => {
+              void handleImportVault(event.target.files?.[0]);
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            disabled={uploadState === "uploading"}
+            onClick={() => vaultInputRef.current?.click()}
+            title="导入 Obsidian vault（zip 内 .md 文件按 frontmatter 建页，与导出对偶）"
+          >
+            {uploadState === "uploading" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <FolderOpen className="size-3.5" />
+            )}
+            导入 vault
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -701,7 +837,16 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
                 总结中：{jobs?.stats.processing ?? 0} 处理 / {jobs?.stats.queued ?? 0} 排队
               </span>
             ) : jobs?.stats.failedRecent ? (
-              <span className="text-destructive">近 1 小时 {jobs.stats.failedRecent} 条总结失败</span>
+              <span className="flex items-center gap-2 text-destructive">
+                近 1 小时 {jobs.stats.failedRecent} 条总结失败
+                <button
+                  type="button"
+                  className="underline underline-offset-2"
+                  onClick={() => void retryFailed()}
+                >
+                  重试
+                </button>
+              </span>
             ) : (
               <span>总结队列空闲</span>
             )}
@@ -806,6 +951,17 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
                     <Badge className={cn("border-transparent", TYPE_BADGE_CLASS[page.type])}>
                       {page.type}
                     </Badge>
+                    {/* 系统派生页（目录/历史/概览）不入修订历史。 */}
+                    {["index.md", "log.md", "overview.md"].includes(page.path) ? null : (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={toggleHistory}
+                        title="版本历史"
+                      >
+                        <History className={cn("size-3.5", historyOpen && "text-primary")} />
+                      </Button>
+                    )}
                     {/* 来源页正文为原文档（或系统生成的摘要），只读；编辑仅开放给实体/概念/查询页。 */}
                     {page.type === "source" ? null : (
                       <Button variant="ghost" size="icon-sm" onClick={startEdit} title="编辑">
@@ -847,41 +1003,170 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
                   </p>
                 ) : null}
 
-                <div className="mt-5">
-                  <Streamdown plugins={streamdownPlugins}>
-                    {renderWikiMarkdown(page.document ? page.document.text : page.content)}
-                  </Streamdown>
-                </div>
-
-                {page.links.length > 0 ? (
-                  <div className="mt-8 border-t pt-4">
-                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <Link2 className="size-3.5" />
-                      链接（{page.links.length}）
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {page.links.map((link) => {
-                        const target = resolveLink(link);
-                        return target ? (
-                          <button
-                            key={link}
-                            type="button"
-                            onClick={() => openPage(target)}
-                            className="rounded-full border bg-accent/60 px-2.5 py-1 text-xs text-accent-foreground transition-colors hover:bg-accent"
-                          >
-                            {link}
-                          </button>
-                        ) : (
-                          <span
-                            key={link}
-                            title="尚未创建"
-                            className="rounded-full border border-dashed px-2.5 py-1 text-xs text-muted-foreground"
-                          >
-                            {link}
-                          </span>
-                        );
-                      })}
+                {page.document?.hasFile &&
+                FILE_PREVIEW_EXTENSIONS.has(documentExtension(page.document.filename)) &&
+                scopeId ? (
+                  <>
+                    <div className="mt-4 flex items-center gap-1 border-b pb-2">
+                      {(
+                        [
+                          { key: "file", label: "原文件预览" },
+                          { key: "text", label: "提取文本" },
+                        ] as const
+                      ).map(({ key, label }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setDocView(key)}
+                          className={cn(
+                            "rounded-md px-2.5 py-1 text-xs transition-colors",
+                            docView === key
+                              ? "bg-accent font-medium text-accent-foreground"
+                              : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
                     </div>
+                    {docView === "file" ? (
+                      <div className="mt-3">
+                        <Suspense
+                          fallback={
+                            <div className="flex h-[70vh] flex-col items-center justify-center gap-2 rounded-lg border">
+                              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                              <p className="text-xs text-muted-foreground">正在加载预览组件…</p>
+                            </div>
+                          }
+                        >
+                          <DocumentFilePreview scopeId={scopeId} document={page.document} />
+                        </Suspense>
+                      </div>
+                    ) : (
+                      <div className="mt-5">
+                        <Streamdown plugins={streamdownPlugins}>
+                          {renderWikiMarkdown(page.document.text)}
+                        </Streamdown>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mt-5">
+                    {page.document ? (
+                      <p className="mb-3 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                        这份文档早于「原件保存」功能上传，暂只能展示提取文本；
+                        重新上传同名文件后即可原样预览 PDF / Word / Excel / PPT。
+                      </p>
+                    ) : null}
+                    <Streamdown plugins={streamdownPlugins}>
+                      {renderWikiMarkdown(page.document ? page.document.text : page.content)}
+                    </Streamdown>
+                  </div>
+                )}
+
+                {page.links.length > 0 || page.backlinks.length > 0 || historyOpen ? (
+                  <div className="mt-8 space-y-5 border-t pt-4">
+                    {page.links.length > 0 ? (
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Link2 className="size-3.5" />
+                          链接（{page.links.length}）
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {page.links.map((link) => {
+                            const target = resolveLink(link);
+                            return target ? (
+                              <button
+                                key={link}
+                                type="button"
+                                onClick={() => openPage(target)}
+                                className="rounded-full border bg-accent/60 px-2.5 py-1 text-xs text-accent-foreground transition-colors hover:bg-accent"
+                              >
+                                {link}
+                              </button>
+                            ) : (
+                              <span
+                                key={link}
+                                title="尚未创建"
+                                className="rounded-full border border-dashed px-2.5 py-1 text-xs text-muted-foreground"
+                              >
+                                {link}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {page.backlinks.length > 0 ? (
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <CornerUpLeft className="size-3.5" />
+                          反向链接（{page.backlinks.length}）
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {page.backlinks.map((backlink) => (
+                            <button
+                              key={backlink.path}
+                              type="button"
+                              onClick={() => openPage(backlink.path)}
+                              title={backlink.path}
+                              className="rounded-full border bg-accent/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                            >
+                              {backlink.title}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {historyOpen ? (
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <History className="size-3.5" />
+                          版本历史（{revisions?.length ?? 0}）· 恢复前会自动保存当前版本
+                        </p>
+                        {revisionsLoading ? (
+                          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            加载中…
+                          </p>
+                        ) : revisions && revisions.length > 0 ? (
+                          <ul className="space-y-1.5">
+                            {revisions.map((revision) => (
+                              <li
+                                key={revision.id}
+                                className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs"
+                              >
+                                <span className="text-muted-foreground">
+                                  {new Date(revision.createdAt).toLocaleString("zh-CN")}
+                                </span>
+                                <Badge variant="secondary" className="text-xs font-normal">
+                                  {REASON_LABELS[revision.reason]}
+                                </Badge>
+                                <span className="text-muted-foreground">
+                                  {revision.chars.toLocaleString()} 字符
+                                </span>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="ml-auto h-6 px-2 text-xs"
+                                  disabled={restoringId !== null}
+                                  onClick={() => void restoreFromHistory(revision.id)}
+                                >
+                                  {restoringId === revision.id ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : null}
+                                  恢复此版本
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">暂无历史修订</p>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </article>

@@ -26,6 +26,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 const NONE = "__none__";
+const WIKI_AUTO_GLOBAL = "__global__";
+const WIKI_AUTO_ON = "__on__";
+const WIKI_AUTO_OFF = "__off__";
 
 export interface ProjectFormProps {
   editing?: ProjectInfo | null;
@@ -43,6 +46,14 @@ export function ProjectForm({ editing = null, onSaved, onCancel }: ProjectFormPr
   const [providerId, setProviderId] = useState(editing?.defaultProviderId ?? "");
   const [modelId, setModelId] = useState(editing?.defaultModelId ?? "");
   const [isActive, setIsActive] = useState(editing?.isActive ?? true);
+  /** 项目级自动总结：null = 跟随全局设置。 */
+  const [wikiAuto, setWikiAuto] = useState<string>(
+    editing?.wikiAutoIngest === true
+      ? WIKI_AUTO_ON
+      : editing?.wikiAutoIngest === false
+        ? WIKI_AUTO_OFF
+        : WIKI_AUTO_GLOBAL,
+  );
   const [saving, setSaving] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string>();
@@ -94,6 +105,8 @@ export function ProjectForm({ editing = null, onSaved, onCancel }: ProjectFormPr
       defaultProviderId: providerId || null,
       defaultModelId: providerId ? modelId || null : null,
       isActive,
+      wikiAutoIngest:
+        wikiAuto === WIKI_AUTO_ON ? true : wikiAuto === WIKI_AUTO_OFF ? false : null,
     };
     try {
       const project = editing
@@ -215,6 +228,19 @@ export function ProjectForm({ editing = null, onSaved, onCancel }: ProjectFormPr
         <Field orientation="horizontal">
           <FieldLabel>启用</FieldLabel>
           <Switch checked={isActive} onCheckedChange={setIsActive} />
+        </Field>
+        <Field>
+          <FieldLabel>对话自动总结进项目知识库</FieldLabel>
+          <Select value={wikiAuto} onValueChange={setWikiAuto}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={WIKI_AUTO_GLOBAL}>跟随全局设置</SelectItem>
+              <SelectItem value={WIKI_AUTO_ON}>开启（覆盖全局）</SelectItem>
+              <SelectItem value={WIKI_AUTO_OFF}>关闭（覆盖全局）</SelectItem>
+            </SelectContent>
+          </Select>
         </Field>
       </FieldGroup>
 

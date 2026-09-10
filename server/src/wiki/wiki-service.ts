@@ -1,13 +1,25 @@
 import JSZip from "jszip";
 import { prisma } from "../db.js";
 import {
+  buildPageFileContent,
+  readRawDocumentFile,
+  removeMirroredRawDocument,
+  removePageFromDisk,
+  saveRawDocumentFile,
+  deleteRawDocumentFile,
+  scheduleScopeSync,
+} from "./wiki-files.js";
+import { querySimilar, reembedPath } from "./wiki-embed.js";
+import {
   isWikiPageType,
+  isWikiRevisionReason,
   WIKI_TYPE_LABELS,
   type WikiDocumentInfo,
   type WikiPageDetail,
   type WikiPageMeta,
   type WikiPageSummary,
   type WikiPageType,
+  type WikiRevisionInfo,
   type WikiScopeInfo,
   type WikiSearchHit,
   type WikiTree,
@@ -16,6 +28,11 @@ import {
 } from "./wiki-types.js";
 
 export const DEFAULT_WIKI_SCOPE = "default";
+
+/** 每个页面保留的修订快照数上限（超出裁掉最旧的）。 */
+const REVISION_KEEP = 30;
+/** 系统派生页（index/log/overview）可随时重建，不入修订历史。 */
+const REVISION_EXEMPT_TYPES = new Set(["index", "log", "overview"]);
 
 /** scopeId：默认工作区为 "default"，项目为 "p:<projectId>"。 */
 export function projectScopeId(projectId: string): string {
@@ -31,6 +48,35 @@ export function parseScopeId(scopeId: string): { kind: "default" } | { kind: "pr
 }
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+
+/** 极简 frontmatter 解析：只取平铺的 title/type/tags/summary
+ * （本应用导出与 Obsidian 常规格式，嵌套结构不解析、按正文处理）。 */
+function splitFrontmatter(raw: string): {
+  frontmatter: { title?: string; type?: string; tags?: string[]; summary?: string };
+  body: string;
+} {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return { frontmatter: {}, body: raw };
+  const frontmatter: { title?: string; type?: string; tags?: string[]; summary?: string } = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const [, key, rawValue] = kv;
+    const value = rawValue.trim().replace(/^["']|["']$/g, "");
+    if (!value) continue;
+    if (key === "tags") {
+      const tags = value
+        .replace(/^\[|\]$/g, "")
+        .split(",")
+        .map((tag) => tag.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+      if (tags.length > 0) frontmatter.tags = tags;
+    } else if (key === "title" || key === "type" || key === "summary") {
+      frontmatter[key] = value;
+    }
+  }
+  return { frontmatter, body: raw.slice(match[0].length) };
+}
 
 /** 解析正文中的 [[wikilink]]（支持 [[Title]] 与 [[path|Title]]）。 */
 export function extractWikiLinks(content: string): string[] {
@@ -77,6 +123,7 @@ function toDocumentInfo(row: {
   text: string;
   chars: number;
   truncated: boolean;
+  hasFile: boolean;
   createdAt: Date;
 }): WikiDocumentInfo {
   return {
@@ -86,6 +133,7 @@ function toDocumentInfo(row: {
     text: row.text,
     chars: row.chars,
     truncated: row.truncated,
+    hasFile: row.hasFile,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -105,7 +153,59 @@ function toDetail(row: {
     content: row.content,
     meta,
     links: extractWikiLinks(row.content),
+    backlinks: [],
   };
+}
+
+/** [[双链]] 目标 → 页面路径解析（标题或路径基名匹配，与图谱一致）。 */
+function resolveLinkTarget(
+  raw: string,
+  byTitle: Map<string, string>,
+  byBaseName: Map<string, string>,
+  nodeIds: Set<string>,
+): string | undefined {
+  const key = raw.trim().toLowerCase().replace(/\.md$/i, "");
+  if (nodeIds.has(raw)) return raw;
+  return byTitle.get(key) ?? byBaseName.get(key.includes("/") ? key.split("/").pop()! : key);
+}
+
+/** 内容被覆盖/删除前保存修订快照；系统派生页跳过，内容未变的重复写入跳过。 */
+async function snapshotRevision(
+  scopeId: string,
+  row: { path: string; title: string; type: string; content: string; meta: string },
+  reason: "manual" | "ingest" | "delete" | "restore",
+): Promise<void> {
+  if (REVISION_EXEMPT_TYPES.has(row.type)) return;
+  const latest = await prisma.wikiPageRevision.findFirst({
+    where: { scopeId, path: row.path },
+    orderBy: { createdAt: "desc" },
+    select: { content: true },
+  });
+  if (latest?.content === row.content) return;
+  await prisma.wikiPageRevision.create({
+    data: {
+      scopeId,
+      path: row.path,
+      title: row.title,
+      type: row.type,
+      content: row.content,
+      meta: row.meta,
+      reason,
+    },
+  });
+  // 只保留最近 REVISION_KEEP 份，裁掉更早的。
+  const keep = await prisma.wikiPageRevision.findMany({
+    where: { scopeId, path: row.path },
+    orderBy: { createdAt: "desc" },
+    take: REVISION_KEEP,
+    select: { createdAt: true },
+  });
+  const oldestKept = keep.at(-1)?.createdAt;
+  if (oldestKept) {
+    await prisma.wikiPageRevision.deleteMany({
+      where: { scopeId, path: row.path, createdAt: { lt: oldestKept } },
+    });
+  }
 }
 
 /** 来源页关联的原文档（无关联或文档已删返回 null）。 */
@@ -260,10 +360,32 @@ class WikiService {
       const document = await documentForMeta(detail.meta);
       if (document) detail.document = document;
     }
+    // 反向链接：scope 内正文 [[双链]] 解析到本页的页面。系统派生页
+    // （index 引用所有页面、log 记录所有操作）会制造海量无意义反链，排除。
+    const siblings = await prisma.wikiPage.findMany({
+      where: { scopeId, type: { in: ["entity", "concept", "source", "query"] } },
+      select: { path: true, title: true, content: true },
+      orderBy: [{ updatedAt: "desc" }, { path: "asc" }],
+    });
+    const byTitle = new Map<string, string>();
+    const byBaseName = new Map<string, string>();
+    const nodeIds = new Set<string>();
+    for (const sibling of siblings) {
+      nodeIds.add(sibling.path);
+      byTitle.set(sibling.title.toLowerCase(), sibling.path);
+      byBaseName.set(sibling.path.split("/").pop()!.replace(/\.md$/i, "").toLowerCase(), sibling.path);
+    }
+    for (const sibling of siblings) {
+      if (sibling.path === detail.path) continue;
+      const linked = extractWikiLinks(sibling.content).some(
+        (link) => resolveLinkTarget(link, byTitle, byBaseName, nodeIds) === detail.path,
+      );
+      if (linked) detail.backlinks.push({ path: sibling.path, title: sibling.title });
+    }
     return detail;
   }
 
-  /** 保存页面（upsert）；写后刷新 index/log 等派生页面。 */
+  /** 保存页面（upsert）；覆盖前存修订快照，写后刷新 index/log 等派生页面。 */
   async savePage(
     scopeId: string,
     input: { path: string; title: string; type?: WikiPageType; content: string; meta?: WikiPageMeta },
@@ -271,6 +393,10 @@ class WikiService {
     await this.ensureScope(scopeId);
     const path = normalizePath(input.path);
     const type = input.type ?? typeFromPath(path);
+    const existing = await prisma.wikiPage.findUnique({
+      where: { scopeId_path: { scopeId, path } },
+    });
+    if (existing) await snapshotRevision(scopeId, existing, "manual");
     const row = await prisma.wikiPage.upsert({
       where: { scopeId_path: { scopeId, path } },
       create: {
@@ -289,6 +415,9 @@ class WikiService {
       },
     });
     await this.rebuildIndex(scopeId);
+    scheduleScopeSync(scopeId);
+    // 手动编辑后语义分块可能过期，后台重建（未配置 embedding 时为 no-op）。
+    void reembedPath(scopeId, path).catch(() => undefined);
     return toDetail(row);
   }
 
@@ -301,23 +430,38 @@ class WikiService {
     const row = await prisma.wikiPage.findUnique({
       where: { scopeId_path: { scopeId, path: normalized } },
     });
+    // 删除前存修订快照：误删可从版本历史恢复（修订不随页面删除）。
+    if (row) await snapshotRevision(scopeId, row, "delete");
     await prisma.wikiPage.deleteMany({ where: { scopeId, path: normalized } });
-    // 来源页删除时连同原文档一起删（「原始资料」分组同步消失）。
+    // 来源页删除时连同原文档一起删（「原始资料」分组同步消失），
+    // 落盘的原始二进制文件与镜像目录里的原件也一并清理。
     if (row?.type === "source") {
       const documentId = parseMeta(row.meta).documentId;
       if (typeof documentId === "string" && documentId) {
+        const document = await prisma.wikiDocument.findUnique({
+          where: { id: documentId },
+          select: { filename: true },
+        });
         await prisma.wikiDocument.deleteMany({ where: { id: documentId } });
+        if (document) {
+          await deleteRawDocumentFile(scopeId, documentId, document.filename);
+          await removeMirroredRawDocument(scopeId, document.filename);
+        }
       }
     }
+    await removePageFromDisk(scopeId, normalized);
+    await prisma.wikiChunk.deleteMany({ where: { scopeId, path: normalized } });
     await this.rebuildIndex(scopeId);
+    scheduleScopeSync(scopeId);
   }
 
   /** 保存原文档（raw 层）：同名覆盖更新，并立即建立对应来源页。
+   * 提取文本入库之外，原始二进制文件一并落盘（hasFile），供原样预览/下载。
    * 来源页正文即原文档内容（前端优先渲染 meta.documentId 指向的原文），
    * 占位 content 只在原文档被单独删除后兜底。 */
   async saveRawDocument(
     scopeId: string,
-    input: { filename: string; title: string; text: string; truncated: boolean },
+    input: { filename: string; title: string; text: string; truncated: boolean; bytes?: Buffer },
   ): Promise<WikiDocumentInfo> {
     await this.ensureScope(scopeId);
     const row = await prisma.wikiDocument.upsert({
@@ -329,15 +473,27 @@ class WikiService {
         text: input.text,
         chars: input.text.length,
         truncated: input.truncated,
+        hasFile: Boolean(input.bytes),
       },
       update: {
         title: input.title,
         text: input.text,
         chars: input.text.length,
         truncated: input.truncated,
+        hasFile: Boolean(input.bytes),
         updatedAt: new Date(),
       },
     });
+    // 原件按 documentId 落盘（upsert 后才有稳定 id）；失败不阻断总结入库。
+    if (input.bytes) {
+      await saveRawDocumentFile(scopeId, row.id, input.filename, input.bytes).catch((error) => {
+        console.error("wiki raw document file save failed", error);
+        return prisma.wikiDocument.update({
+          where: { id: row.id },
+          data: { hasFile: false },
+        });
+      });
+    }
     const path = `sources/${slugify(input.title)}.md`;
     await prisma.wikiPage.upsert({
       where: { scopeId_path: { scopeId, path } },
@@ -357,11 +513,13 @@ class WikiService {
       },
     });
     await this.rebuildIndex(scopeId);
+    scheduleScopeSync(scopeId);
     return toDocumentInfo(row);
   }
 
   /** 关键词搜索（CJK 友好）：按空白拆词后 OR 命中，标题命中权重高于正文，
-   * 按命中词数加权排序；片段取首个命中词附近的内容。 */
+   * 按命中词数加权排序；片段取首个命中词附近的内容。
+   * 页面与原文档全文都参与——上传文档里摘要没覆盖到的内容也能被搜到。 */
   async search(scopeId: string, query: string, limit = 20): Promise<WikiSearchHit[]> {
     await this.ensureScope(scopeId);
     const terms = [
@@ -374,18 +532,30 @@ class WikiService {
       ),
     ];
     if (terms.length === 0) return [];
-    const rows = await prisma.wikiPage.findMany({
-      where: {
-        scopeId,
-        OR: terms.flatMap((term) => [
-          { title: { contains: term } },
-          { content: { contains: term } },
-          { meta: { contains: term } },
-        ]),
-      },
-      orderBy: [{ updatedAt: "desc" }],
-      take: 200,
-    });
+    const [rows, documents] = await Promise.all([
+      prisma.wikiPage.findMany({
+        where: {
+          scopeId,
+          OR: terms.flatMap((term) => [
+            { title: { contains: term } },
+            { content: { contains: term } },
+            { meta: { contains: term } },
+          ]),
+        },
+        orderBy: [{ updatedAt: "desc" }],
+        take: 200,
+      }),
+      prisma.wikiDocument.findMany({
+        where: {
+          scopeId,
+          OR: terms.flatMap((term) => [
+            { title: { contains: term } },
+            { text: { contains: term } },
+          ]),
+        },
+        take: 100,
+      }),
+    ]);
     const scored: Array<{ hit: WikiSearchHit; score: number }> = [];
     for (const row of rows) {
       const summary = toSummary(row);
@@ -415,17 +585,183 @@ class WikiService {
         score,
       });
     }
+    // 原文档全文命中 → 归到对应 sources/ 来源页（来源页已命中的不重复计）。
+    const hitPaths = new Set(scored.map((entry) => entry.hit.path));
+    for (const document of documents) {
+      const docPath = `sources/${slugify(document.title)}.md`;
+      if (hitPaths.has(docPath)) continue;
+      const lowerTitle = document.title.toLowerCase();
+      const lowerText = document.text.toLowerCase();
+      let score = 0;
+      let firstIndex = -1;
+      for (const term of terms) {
+        const inTitle = lowerTitle.includes(term);
+        const textIndex = lowerText.indexOf(term);
+        if (!inTitle && textIndex < 0) continue;
+        score += 1 + (inTitle ? 3 : 0) + (textIndex >= 0 ? 1 : 0);
+        if (textIndex >= 0 && (firstIndex < 0 || textIndex < firstIndex)) {
+          firstIndex = textIndex;
+        }
+      }
+      if (score === 0) continue;
+      const start = Math.max(0, firstIndex - 40);
+      const snippet =
+        firstIndex >= 0
+          ? `${start > 0 ? "…" : ""}${document.text.slice(start, start + 140).replace(/\s+/g, " ")}…`
+          : "";
+      scored.push({
+        hit: { path: docPath, title: document.title, type: "source", snippet },
+        score,
+      });
+    }
+    // 语义补充召回：配置了 embedding 时，关键词没命中的页面按余弦相似度补位
+    // （分数固定低于任何关键词命中）；未配置或调用失败时静默回落纯关键词。
+    try {
+      const similar = await querySimilar(scopeId, query, 8);
+      if (similar.length > 0) {
+        const hitPaths = new Set(scored.map((entry) => entry.hit.path));
+        const missing = similar.filter((hit) => !hitPaths.has(hit.path));
+        if (missing.length > 0) {
+          const rowsForPaths = await prisma.wikiPage.findMany({
+            where: { scopeId, path: { in: missing.map((hit) => hit.path) } },
+            select: { path: true, title: true, type: true },
+          });
+          const byPath = new Map(rowsForPaths.map((row) => [row.path, row]));
+          for (const hit of missing) {
+            const row = byPath.get(hit.path);
+            if (!row) continue;
+            scored.push({
+              hit: {
+                path: hit.path,
+                title: row.title,
+                type: isWikiPageType(row.type) ? row.type : "concept",
+                snippet: hit.snippet,
+              },
+              score: 0.5,
+            });
+          }
+        }
+      }
+    } catch {
+      // 语义检索不可用不影响关键词结果
+    }
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit).map((entry) => entry.hit);
   }
 
-  /** 由 LLM 产出的页面集合合并写入（ingest 落库路径）。 */
+  /** 导入 Obsidian vault（zip 里的 .md 文件）：frontmatter 取 title/type/tags/summary，
+   * 正文原样入库（[[双链]] 天然兼容）。覆盖已有页面前存修订快照。 */
+  async importPages(
+    scopeId: string,
+    entries: Array<{ path: string; title?: string; type?: string; tags?: string[]; summary?: string; content: string }>,
+  ): Promise<number> {
+    await this.ensureScope(scopeId);
+    let imported = 0;
+    for (const entry of entries) {
+      const path = normalizePath(entry.path);
+      const type = isWikiPageType(entry.type) ? entry.type : typeFromPath(path);
+      const title = entry.title?.trim() || path;
+      const existing = await prisma.wikiPage.findUnique({
+        where: { scopeId_path: { scopeId, path } },
+      });
+      if (existing) await snapshotRevision(scopeId, existing, "manual");
+      await prisma.wikiPage.upsert({
+        where: { scopeId_path: { scopeId, path } },
+        create: {
+          scopeId,
+          path,
+          title,
+          type,
+          content: entry.content,
+          meta: JSON.stringify({
+            ...(entry.tags?.length ? { tags: entry.tags } : {}),
+            ...(entry.summary ? { summary: entry.summary } : {}),
+            imported: true,
+          }),
+        },
+        update: {
+          title,
+          type,
+          content: entry.content,
+          updatedAt: new Date(),
+        },
+      });
+      imported += 1;
+      void reembedPath(scopeId, path).catch(() => undefined);
+    }
+    await this.rebuildIndex(scopeId);
+    scheduleScopeSync(scopeId);
+    return imported;
+  }
+
+  /** 解析 Obsidian vault zip（与 exportZip 对偶）：取全部 .md 条目，
+   * frontmatter 取 title/type/tags/summary，正文原样导入。 */
+  async importVaultZip(
+    scopeId: string,
+    buffer: Buffer,
+  ): Promise<{ imported: number; skipped: string[] }> {
+    await this.ensureScope(scopeId);
+    const zip = await JSZip.loadAsync(buffer);
+    const entries: Array<{
+      path: string;
+      title?: string;
+      type?: string;
+      tags?: string[];
+      summary?: string;
+      content: string;
+    }> = [];
+    const skipped: string[] = [];
+    for (const [name, file] of Object.entries(zip.files)) {
+      if (file.dir) continue;
+      const clean = name.replace(/\\/g, "/").replace(/^\.\//, "");
+      if (!/\.(md|markdown)$/i.test(clean)) {
+        skipped.push(clean);
+        continue;
+      }
+      if (clean.split("/").some((segment) => segment.startsWith(".") || segment === "__MACOSX")) {
+        skipped.push(clean);
+        continue;
+      }
+      const raw = await file.async("string");
+      const { frontmatter, body } = splitFrontmatter(raw);
+      entries.push({
+        path: clean,
+        title: frontmatter.title,
+        type: frontmatter.type,
+        tags: frontmatter.tags,
+        summary: frontmatter.summary,
+        content: body.trimStart(),
+      });
+    }
+    const imported = await this.importPages(scopeId, entries);
+    if (imported > 0) {
+      await this.appendLog(scopeId, {
+        heading: `导入 vault（${imported} 个页面）`,
+        body: entries.map((entry) => `[[${entry.title ?? entry.path}]]`).join("、"),
+      });
+    }
+    return { imported, skipped };
+  }
+
+  /** 由 LLM 产出的页面集合合并写入（ingest 落库路径）。
+   * 覆盖前存修订快照；meta 与旧值字段级合并——LLM 这次没输出 tags/summary
+   * 时不应该清空上次沉淀的元信息。 */
   async applyIngestPages(
     scopeId: string,
     pages: Array<{ path: string; title: string; type: WikiPageType; content: string; meta?: WikiPageMeta }>,
   ): Promise<void> {
-    for (const page of pages) {
-      const path = normalizePath(page.path);
+    for (const input of pages) {
+      const path = normalizePath(input.path);
+      const existing = await prisma.wikiPage.findUnique({
+        where: { scopeId_path: { scopeId, path } },
+      });
+      let page = input;
+      if (existing) {
+        await snapshotRevision(scopeId, existing, "ingest");
+        if (page.meta !== undefined) {
+          page = { ...page, meta: { ...parseMeta(existing.meta), ...page.meta } };
+        }
+      }
       await prisma.wikiPage.upsert({
         where: { scopeId_path: { scopeId, path } },
         create: {
@@ -445,6 +781,7 @@ class WikiService {
         },
       });
     }
+    scheduleScopeSync(scopeId);
   }
 
   /** log.md 追加一条操作记录（llm_wiki 的操作历史）。 */
@@ -463,6 +800,7 @@ class WikiService {
       create: { scopeId, path: "log.md", title: "操作历史", type: "log", content, meta: "{}" },
       update: { content },
     });
+    scheduleScopeSync(scopeId);
   }
 
   /** overview.md 顶部替换为最新全局摘要（LLM 输出的 overview 段落）。 */
@@ -481,6 +819,7 @@ class WikiService {
       create: { scopeId, path: "overview.md", title: "概览", type: "overview", content: `${header}${body}`, meta: "{}" },
       update: { content: `${header}${body}`, updatedAt: new Date() },
     });
+    scheduleScopeSync(scopeId);
   }
 
   /** index.md 目录页：按类型分组的全量页面目录（每次写操作后重建）。 */
@@ -502,6 +841,61 @@ class WikiService {
       create: { scopeId, path: "index.md", title: "目录", type: "index", content, meta: "{}" },
       update: { content },
     });
+    scheduleScopeSync(scopeId);
+  }
+
+  /** 版本历史：某页面最近的修订快照（新 → 旧）。 */
+  async listRevisions(scopeId: string, path: string, limit = 30): Promise<WikiRevisionInfo[]> {
+    await this.ensureScope(scopeId);
+    const rows = await prisma.wikiPageRevision.findMany({
+      where: { scopeId, path: normalizePath(path) },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      path: row.path,
+      title: row.title,
+      reason: isWikiRevisionReason(row.reason) ? row.reason : "manual",
+      chars: row.content.length,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  /** 恢复到某次修订：当前内容先存快照（恢复本身可撤销），再回写旧版本。 */
+  async restoreRevision(scopeId: string, path: string, revisionId: string): Promise<WikiPageDetail> {
+    await this.ensureScope(scopeId);
+    const normalized = normalizePath(path);
+    const revision = await prisma.wikiPageRevision.findUnique({ where: { id: revisionId } });
+    if (!revision || revision.scopeId !== scopeId || revision.path !== normalized) {
+      throw new Error("修订不存在");
+    }
+    const existing = await prisma.wikiPage.findUnique({
+      where: { scopeId_path: { scopeId, path: normalized } },
+    });
+    if (existing) await snapshotRevision(scopeId, existing, "restore");
+    await prisma.wikiPage.upsert({
+      where: { scopeId_path: { scopeId, path: normalized } },
+      create: {
+        scopeId,
+        path: normalized,
+        title: revision.title,
+        type: revision.type,
+        content: revision.content,
+        meta: revision.meta,
+      },
+      update: {
+        title: revision.title,
+        type: revision.type,
+        content: revision.content,
+        meta: revision.meta,
+        updatedAt: new Date(),
+      },
+    });
+    await this.rebuildIndex(scopeId);
+    scheduleScopeSync(scopeId);
+    void reembedPath(scopeId, normalized).catch(() => undefined);
+    return this.page(scopeId, normalized);
   }
 
   allPages(scopeId: string) {
@@ -509,7 +903,9 @@ class WikiService {
   }
 
   /** 导出为 Obsidian 兼容 vault（zip）：每页带 YAML frontmatter；
-   * 关联原文档的来源页正文写原文（摘要保留在 frontmatter summary）。 */
+   * 关联原文档的来源页正文写原文（摘要保留在 frontmatter summary），
+   * 已落盘的原始二进制文件放入 raw/sources/（llm-wiki 布局）。
+   * 文件内容构建与磁盘镜像共用 buildPageFileContent。 */
   async exportZip(scopeId: string): Promise<Buffer> {
     await this.ensureScope(scopeId);
     const pages = await this.allPages(scopeId);
@@ -521,21 +917,11 @@ class WikiService {
         row.type === "source" && typeof meta.documentId === "string" && meta.documentId
           ? await prisma.wikiDocument.findUnique({ where: { id: meta.documentId } })
           : null;
-      const summary = meta.summary ?? (rawDocument ? row.content : undefined);
-      const frontmatter = [
-        "---",
-        `title: ${JSON.stringify(row.title)}`,
-        `type: ${row.type}`,
-        ...(meta.tags?.length ? [`tags: [${meta.tags.map((tag) => JSON.stringify(tag)).join(", ")}]`] : []),
-        ...(meta.sources?.length ? [`sources: [${meta.sources.map((s) => JSON.stringify(s)).join(", ")}]`] : []),
-        ...(summary ? [`summary: ${JSON.stringify(summary)}`] : []),
-        ...(rawDocument ? [`filename: ${JSON.stringify(rawDocument.filename)}`] : []),
-        `updated: ${row.updatedAt.toISOString()}`,
-        "---",
-        "",
-      ].join("\n");
-      const body = rawDocument?.text ?? row.content;
-      zip.file(row.path, `${frontmatter}${body}\n`);
+      zip.file(row.path, buildPageFileContent(row, rawDocument));
+      if (rawDocument?.hasFile) {
+        const bytes = await readRawDocumentFile(scopeId, rawDocument.id, rawDocument.filename);
+        if (bytes) zip.file(`raw/sources/${rawDocument.filename}`, bytes);
+      }
     }
     return zip.generateAsync({ type: "nodebuffer" });
   }

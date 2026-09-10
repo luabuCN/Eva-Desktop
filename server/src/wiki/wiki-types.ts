@@ -52,6 +52,8 @@ export interface WikiDocumentInfo {
   text: string;
   chars: number;
   truncated: boolean;
+  /** 原始二进制文件已落盘：支持原样预览/下载（旧数据可能为 false）。 */
+  hasFile: boolean;
   createdAt: string;
 }
 
@@ -87,8 +89,29 @@ export interface WikiPageDetail extends WikiPageSummary {
   meta: WikiPageMeta;
   /** 从正文中解析出的 [[wikilink]] 目标（去重，保持出现顺序）。 */
   links: string[];
+  /** 反向链接：正文中 [[双链]] 指向本页的页面（按更新时间倒序）。 */
+  backlinks: Array<{ path: string; title: string }>;
   /** 来源页关联的原文档（正文展示原文而非 LLM 摘要）。 */
   document?: WikiDocumentInfo;
+}
+
+/** 修订快照：内容被覆盖 / 删除 / 恢复前的存档（版本历史条目）。 */
+export interface WikiRevisionInfo {
+  id: string;
+  path: string;
+  title: string;
+  /** manual = 手动编辑；ingest = 总结合并；delete = 删除前；restore = 恢复前 */
+  reason: WikiRevisionReason;
+  /** 快照正文字符数。 */
+  chars: number;
+  createdAt: string;
+}
+
+export const WIKI_REVISION_REASONS = ["manual", "ingest", "delete", "restore"] as const;
+export type WikiRevisionReason = (typeof WIKI_REVISION_REASONS)[number];
+
+export function isWikiRevisionReason(value: unknown): value is WikiRevisionReason {
+  return typeof value === "string" && (WIKI_REVISION_REASONS as readonly string[]).includes(value);
 }
 
 export interface WikiTreeGroup {

@@ -70,6 +70,8 @@ model Project {
   isActive          Boolean        @default(true)
   pinned            Boolean        @default(false)
   archivedAt        DateTime?
+  /// 项目级对话自动总结开关：null = 跟随全局设置，true/false = 强制开/关。
+  wikiAutoIngest    Boolean?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   conversations     Conversation[]
@@ -306,9 +308,47 @@ model WikiPage {
   @@index([scopeId, type])
 }
 
+/// 页面修订快照：内容被覆盖（总结合并 / 手动编辑 / 删除 / 恢复）前保存一份。
+/// LLM「不要丢弃已有知识」只是提示词软约束，坏合并必须可回滚。
+/// 页面删除后修订保留（可恢复误删）；系统派生页（index/log/overview）不入修订。
+model WikiPageRevision {
+  id        String   @id @default(uuid())
+  scopeId   String
+  path      String
+  title     String
+  type      String
+  content   String
+  meta      String   @default("{}")
+  /// manual = 手动编辑；ingest = 总结合并；delete = 删除前；restore = 恢复前
+  reason    String   @default("manual")
+  createdAt DateTime @default(now())
+
+  @@index([scopeId, path, createdAt])
+}
+
+/// 知识库语义检索：页面/原文档的分块 embedding（SQLite 无向量类型，
+/// JSON 数组存储 + JS 余弦相似度，桌面规模足够）。
+/// path 指向所属 wiki 页面；来源页 = 原文档全文 + 摘要页正文合并分块。
+model WikiChunk {
+  id         String   @id @default(uuid())
+  scopeId    String
+  path       String
+  chunkIndex Int
+  text       String
+  /// JSON 数组形式的 embedding 向量。
+  embedding  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([scopeId, path, chunkIndex])
+  @@index([scopeId])
+}
+
 /// 知识库原文档（llm-wiki 的 raw/sources 层）：上传文档提取的原始全文，
 /// 不可变；sources/ 来源页正文从这里渲染，导出 Obsidian 时也写原文。
 /// 同名重复上传按 (scopeId, filename) 覆盖更新。
+/// hasFile = 原始二进制文件已落盘（dataDir/wiki-raw），支持原样预览/下载；
+/// 旧数据未存原件时为 false，正文只能展示提取文本。
 model WikiDocument {
   id        String   @id @default(uuid())
   scopeId   String
@@ -317,6 +357,7 @@ model WikiDocument {
   text      String
   chars     Int      @default(0)
   truncated Boolean  @default(false)
+  hasFile   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

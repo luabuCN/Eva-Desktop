@@ -31,7 +31,8 @@ export function encodeWikiLink(scopeId: string, path: string): string {
 const WIKISEARCH_DESCRIPTION = `Search the user's personal knowledge base (wiki), which is built automatically from past conversations and uploaded project documents (API specs, requirement docs, notes).
 
 - Use it FIRST for any question about the user's own projects, past decisions, uploaded documents, or previously discussed topics — before answering from general knowledge or searching the web.
-- Keywords work in Chinese or English; the match is substring-based, so prefer short distinctive terms.
+- Keywords work in Chinese or English. Matching is hybrid: exact keyword/substring hits rank first, and (when the user configured an embedding model) semantically similar pages fill in as extra recall — so also try paraphrases or topic words when exact terms miss.
+- Original uploaded document text is searchable too, not just the summaries.
 - Each result has title, type (entity/concept/source/query), snippet, and a link.
 - When a snippet is not enough, call wikiRead with that result's path (and scope) for the full content.
 - When your answer uses knowledge base content, cite the pages as markdown links using their link field (e.g. [页面标题](wiki/...)) so the user can click to open the wiki page.`;

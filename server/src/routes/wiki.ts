@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { extractDocumentTextFromBytes } from "../runtime/tools/document-extract.js";
 import { buildWikiGraph } from "../wiki/wiki-graph.js";
+import { readRawDocumentFile, syncAllScopesToDisk } from "../wiki/wiki-files.js";
 import { parseScopeId, wikiService } from "../wiki/wiki-service.js";
 import { isWikiPageType } from "../wiki/wiki-types.js";
 import {
@@ -15,6 +16,19 @@ export const wikiRoutes = new Hono();
 
 /** 单个上传文档的大小上限（与聊天附件同量级）。 */
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
+/** 原件服务的 Content-Type（按扩展名；缺省走通用二进制流）。 */
+const FILE_CONTENT_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".md": "text/markdown; charset=utf-8",
+  ".markdown": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+};
 
 /** 静态子路径需在 /:scopeId 之前注册（Hono 按注册顺序匹配）。 */
 
@@ -29,6 +43,11 @@ wikiRoutes.get("/settings", async (c) => {
 const settingsUpdateSchema = z.object({
   autoIngest: z.boolean().optional(),
   defaultScope: z.string().min(1).optional(),
+  /** null = 恢复默认镜像目录。 */
+  storagePath: z.string().min(1).nullable().optional(),
+  /** 语义检索 embedding 配置：两项都为 null = 关闭。 */
+  embeddingProviderId: z.string().min(1).nullable().optional(),
+  embeddingModelId: z.string().min(1).nullable().optional(),
 });
 
 wikiRoutes.put("/settings", async (c) => {
@@ -72,11 +91,54 @@ wikiRoutes.get("/jobs", async (c) => {
   });
 });
 
+/** 重试失败的总结任务（全部 / 单条）。 */
+wikiRoutes.post("/jobs/retry-failed", async (c) => {
+  return c.json({ retried: await wikiQueue.retryFailedJobs() });
+});
+
+wikiRoutes.post("/jobs/:id/retry", async (c) => {
+  const ok = await wikiQueue.retryJob(c.req.param("id"));
+  if (!ok) return c.json({ error: "任务不存在或当前状态不可重试" }, 404);
+  return c.json({ ok: true });
+});
+
+/** 手动重新同步磁盘镜像（修改存放路径后或怀疑镜像不同步时）。 */
+wikiRoutes.post("/storage/resync", async (c) => {
+  const synced = await syncAllScopesToDisk();
+  return c.json({ ok: true, synced });
+});
+
 wikiRoutes.get("/:scopeId/tree", async (c) => {
   const scopeId = c.req.param("scopeId");
   const typeParam = c.req.query("type");
   const type = isWikiPageType(typeParam) ? typeParam : undefined;
   return c.json(await wikiService.treeFiltered(scopeId, type));
+});
+
+/** 原始二进制文件服务：预览（inline）/ 下载（?download=1）。
+ * 按扩展名给 Content-Type；文件名用 RFC 5987 编码兼容中文。 */
+wikiRoutes.get("/:scopeId/documents/:documentId/file", async (c) => {
+  const scopeId = c.req.param("scopeId");
+  const documentId = c.req.param("documentId");
+  const document = await prisma.wikiDocument.findUnique({
+    where: { id: documentId },
+    select: { scopeId: true, filename: true, hasFile: true },
+  });
+  if (!document || document.scopeId !== scopeId || !document.hasFile) {
+    return c.json({ error: "原文档不存在或未保存原件" }, 404);
+  }
+  const bytes = await readRawDocumentFile(scopeId, documentId, document.filename);
+  if (!bytes) return c.json({ error: "原文档文件已丢失（可重新上传恢复）" }, 404);
+  const dot = document.filename.lastIndexOf(".");
+  const extension = dot >= 0 ? document.filename.slice(dot).toLowerCase() : "";
+  const disposition = c.req.query("download") ? "attachment" : "inline";
+  return new Response(new Uint8Array(bytes), {
+    headers: {
+      "content-type": FILE_CONTENT_TYPES[extension] ?? "application/octet-stream",
+      "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(document.filename)}`,
+      "cache-control": "no-store",
+    },
+  });
 });
 
 wikiRoutes.get("/:scopeId/page", async (c) => {
@@ -104,6 +166,37 @@ wikiRoutes.put("/:scopeId/page", async (c) => {
 wikiRoutes.delete("/:scopeId/page", async (c) => {
   await wikiService.deletePage(c.req.param("scopeId"), c.req.query("path") ?? "");
   return c.json({ ok: true });
+});
+
+/** 版本历史：某页面最近的修订快照。 */
+wikiRoutes.get("/:scopeId/revisions", async (c) => {
+  const revisions = await wikiService.listRevisions(
+    c.req.param("scopeId"),
+    c.req.query("path") ?? "",
+  );
+  return c.json({ revisions });
+});
+
+const revisionRestoreSchema = z.object({
+  path: z.string().min(1),
+  revisionId: z.string().min(1),
+});
+
+wikiRoutes.post("/:scopeId/revisions/restore", async (c) => {
+  const body = revisionRestoreSchema.parse(await c.req.json());
+  try {
+    const page = await wikiService.restoreRevision(
+      c.req.param("scopeId"),
+      body.path,
+      body.revisionId,
+    );
+    return c.json({ page });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "恢复失败" },
+      400,
+    );
+  }
 });
 
 wikiRoutes.get("/:scopeId/graph", async (c) => {
@@ -177,13 +270,15 @@ wikiRoutes.post("/:scopeId/ingest/document", async (c) => {
 
   const title = body.filename.replace(/\.[^.]+$/, "").trim() || body.filename;
   const parsed = parseScopeId(scopeId);
-  // 原文档先落库（raw 层不可变），并立即建好「来源/原始资料」入口页——
-  // 点击来源看到的就是原文；LLM 总结完成后再回填摘要与关联实体。
+  // 原文档先落库（raw 层不可变，原始二进制一并落盘供原样预览），并立即
+  // 建好「来源/原始资料」入口页——点击来源即可预览原件；LLM 总结完成后
+  // 再回填摘要与关联实体。
   const document = await wikiService.saveRawDocument(scopeId, {
     filename: body.filename,
     title,
     text: extracted.text,
     truncated: extracted.truncated,
+    bytes,
   });
   await wikiQueue.enqueueDocument({
     scopeId,
@@ -194,6 +289,30 @@ wikiRoutes.post("/:scopeId/ingest/document", async (c) => {
     text: extracted.text,
   });
   return c.json({ ok: true, chars: extracted.text.length, truncated: extracted.truncated });
+});
+
+/** 导入 Obsidian vault（zip 里的 .md 文件，与导出对偶）。 */
+const vaultImportSchema = z.object({
+  contentBase64: z.string().min(1),
+});
+
+wikiRoutes.post("/:scopeId/import", async (c) => {
+  const scopeId = c.req.param("scopeId");
+  const body = vaultImportSchema.parse(await c.req.json());
+  const bytes = Buffer.from(body.contentBase64, "base64");
+  if (bytes.length === 0) return c.json({ error: "文件内容为空" }, 400);
+  if (bytes.length > 50 * 1024 * 1024) {
+    return c.json({ error: "zip 超过 50MB 上限" }, 400);
+  }
+  try {
+    const result = await wikiService.importVaultZip(scopeId, bytes);
+    return c.json(result);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "导入失败（需要有效的 zip 文件）" },
+      400,
+    );
+  }
 });
 
 /** 从历史会话构建整个知识库（项目 wiki 初次生成的入口）。 */

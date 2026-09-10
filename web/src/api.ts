@@ -158,6 +158,8 @@ export interface ProjectInfo {
   isActive: boolean;
   pinned?: boolean;
   archivedAt?: string | null;
+  /** 项目级对话自动总结开关：null = 跟随全局设置。 */
+  wikiAutoIngest?: boolean | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -845,6 +847,8 @@ export interface WikiDocumentInfo {
   text: string;
   chars: number;
   truncated: boolean;
+  /** 原始二进制文件已落盘：可原样预览/下载（旧数据为 false 只能看提取文本）。 */
+  hasFile: boolean;
   createdAt: string;
 }
 
@@ -852,7 +856,19 @@ export interface WikiPageDetail extends WikiPageSummary {
   content: string;
   meta: WikiPageMeta;
   links: string[];
+  /** 反向链接：正文 [[双链]] 指向本页的页面。 */
+  backlinks: Array<{ path: string; title: string }>;
   document?: WikiDocumentInfo;
+}
+
+/** 版本历史条目：内容被覆盖/删除/恢复前的修订快照。 */
+export interface WikiRevision {
+  id: string;
+  path: string;
+  title: string;
+  reason: "manual" | "ingest" | "delete" | "restore";
+  chars: number;
+  createdAt: string;
 }
 
 export interface WikiTreeGroup {
@@ -945,6 +961,21 @@ function wikiPath(scopeId: string, suffix = ""): string {
   return `/api/wiki/${encodeURIComponent(scopeId)}${suffix}`;
 }
 
+/** 原始文件下载地址（?download=1 触发浏览器下载而非内联）。 */
+export function wikiDocumentFileUrl(scopeId: string, documentId: string, download = false): string {
+  return `${API_URL}${wikiPath(scopeId, `/documents/${encodeURIComponent(documentId)}/file`)}${download ? "?download=1" : ""}`;
+}
+
+/** 拉取原文档二进制并包装成 File（预览器按文件名扩展名选择渲染链路）。 */
+export async function fetchWikiDocumentFile(scopeId: string, document: WikiDocumentInfo): Promise<File> {
+  const response = await fetch(wikiDocumentFileUrl(scopeId, document.id));
+  if (!response.ok) {
+    throw new Error("原始文件加载失败（可重新上传该文档恢复原件）");
+  }
+  const bytes = await response.arrayBuffer();
+  return new File([bytes], document.filename);
+}
+
 export function listWikiScopes(): Promise<WikiScopeInfo[]> {
   return apiFetch<{ scopes: WikiScopeInfo[] }>("/api/wiki/scopes").then((data) => data.scopes);
 }
@@ -954,6 +985,11 @@ export interface WikiSettings {
   autoIngest: boolean;
   /** 知识库页默认打开的空间（默认知识库或项目知识库）。 */
   defaultScope: string;
+  /** 全部 wiki 文件的磁盘镜像根目录（每个知识库一个子文件夹）。 */
+  storagePath: string;
+  /** 语义检索 embedding 配置（null = 关闭，仅关键词检索）。 */
+  embeddingProviderId: string | null;
+  embeddingModelId: string | null;
 }
 
 export function fetchWikiSettings(): Promise<WikiSettings> {
@@ -961,7 +997,12 @@ export function fetchWikiSettings(): Promise<WikiSettings> {
 }
 
 export function updateWikiSettings(
-  input: Partial<Pick<WikiSettings, "autoIngest" | "defaultScope">>,
+  input: Partial<Pick<WikiSettings, "autoIngest" | "defaultScope">> & {
+    /** null = 恢复默认镜像目录 / 关闭语义检索。 */
+    storagePath?: string | null;
+    embeddingProviderId?: string | null;
+    embeddingModelId?: string | null;
+  },
 ): Promise<WikiSettings> {
   return apiFetch("/api/wiki/settings", {
     method: "PUT",
@@ -1024,6 +1065,48 @@ export function rebuildWiki(scopeId: string): Promise<{ enqueued: number }> {
 
 export function fetchWikiJobs(): Promise<WikiJobsInfo> {
   return apiFetch("/api/wiki/jobs");
+}
+
+/** 重试全部失败的总结任务，返回重新入队数。 */
+export function retryFailedWikiJobs(): Promise<{ retried: number }> {
+  return apiFetch("/api/wiki/jobs/retry-failed", { method: "POST" });
+}
+
+/** 版本历史：某页面最近的修订快照（新 → 旧）。 */
+export function fetchWikiRevisions(scopeId: string, path: string): Promise<WikiRevision[]> {
+  return apiFetch<{ revisions: WikiRevision[] }>(
+    `${wikiPath(scopeId, "/revisions")}?path=${encodeURIComponent(path)}`,
+  ).then((data) => data.revisions);
+}
+
+/** 恢复到某次修订（当前内容会先存一份快照，恢复可再撤销）。 */
+export function restoreWikiRevision(
+  scopeId: string,
+  path: string,
+  revisionId: string,
+): Promise<WikiPageDetail> {
+  return apiFetch<{ page: WikiPageDetail }>(wikiPath(scopeId, "/revisions/restore"), {
+    method: "POST",
+    body: JSON.stringify({ path, revisionId }),
+  }).then((data) => data.page);
+}
+
+/** 手动重新同步磁盘镜像，返回同步的页面数。 */
+export function resyncWikiStorage(): Promise<{ synced: number }> {
+  return apiFetch("/api/wiki/storage/resync", { method: "POST" });
+}
+
+/** 导入 Obsidian vault（zip 内 .md 文件，frontmatter 解析为页面元信息）。 */
+export async function importWikiVault(
+  scopeId: string,
+  file: File,
+): Promise<{ imported: number; skipped: string[] }> {
+  if (file.size > 50 * 1024 * 1024) throw new Error("zip 超过 50MB 上限");
+  const contentBase64 = await fileToBase64(file);
+  return apiFetch<{ imported: number; skipped: string[] }>(wikiPath(scopeId, "/import"), {
+    method: "POST",
+    body: JSON.stringify({ contentBase64 }),
+  });
 }
 
 export function wikiExportUrl(scopeId: string): string {
