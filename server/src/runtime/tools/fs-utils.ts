@@ -1,5 +1,4 @@
 import path from "node:path";
-import { workspaceDir } from "../../env.js";
 import { SafeFsProvider } from "../../safe-fs.js";
 
 export const DEFAULT_MAX_LINES = 2_000;
@@ -17,9 +16,6 @@ export const BINARY_EXTENSIONS = new Set([
   // OOXML/Office 文档：readFile 走文本提取，但不能当普通文本改写。
   ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
 ]);
-
-/** Provider bound to the global workspace; used by the file-browser API. */
-export const workspaceFileProvider = new SafeFsProvider(workspaceDir);
 
 export async function walkDirectory(
   fsProvider: SafeFsProvider,

@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react";
-import { Check, Languages, Monitor, Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Check, FolderOpenIcon, Languages, Monitor, Moon, Sun } from "lucide-react";
+import { getWorkspaceSetting, setWorkspaceSetting, type WorkspaceSettingInfo } from "@/api";
 
 import {
   loadCloseBehavior,
@@ -29,6 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 /** 可选中卡片（语言/主题选项）：预览块 + 名称，选中时粗边框加角标。 */
 function OptionCard({
@@ -89,6 +92,79 @@ function SettingRow({
   );
 }
 
+/** 默认工作区配置行：路径展示 + 系统目录选择对话框更改。 */
+function WorkspaceRow() {
+  const t = useT();
+  const [setting, setSetting] = useState<WorkspaceSettingInfo>();
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+
+  const refresh = useCallback(() => {
+    void getWorkspaceSetting().then(setSetting).catch(() => undefined);
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const change = async (dir?: string | null) => {
+    if (saving) return;
+    let next = dir;
+    if (!next) {
+      if ("__TAURI_INTERNALS__" in window) {
+        try {
+          const { open } = await import("@tauri-apps/plugin-dialog");
+          const selected = await open({ directory: true, multiple: false });
+          if (typeof selected !== "string") return;
+          next = selected;
+        } catch {
+          return;
+        }
+      } else {
+        const input = window.prompt(t("general.workspace.desc"));
+        if (!input?.trim()) return;
+        next = input.trim();
+      }
+    }
+    setSaving(true);
+    setError(undefined);
+    try {
+      setSetting(await setWorkspaceSetting(next));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingRow
+      label={t("general.workspace")}
+      description={setting ? undefined : t("general.workspace.desc")}
+    >
+      <div className="flex max-w-md flex-col items-end gap-1">
+        <div className="flex items-center gap-2">
+          <span
+            className="max-w-64 truncate font-mono text-xs text-muted-foreground"
+            title={setting?.path}
+          >
+            {setting?.path ?? "…"}
+          </span>
+          <Badge variant={setting?.configured ? "secondary" : "outline"}>
+            {setting?.configured ? t("general.workspace.custom") : t("general.workspace.default")}
+          </Badge>
+          <Button size="sm" variant="outline" disabled={saving} onClick={() => void change()}>
+            <FolderOpenIcon className="size-3.5" />
+            {t("general.workspace.change")}
+          </Button>
+        </div>
+        {setting ? (
+          <span className="text-xs text-muted-foreground">{t("general.workspace.desc")}</span>
+        ) : null}
+        {error ? <span className="text-xs text-destructive">{error}</span> : null}
+      </div>
+    </SettingRow>
+  );
+}
+
 /** 设置页的常规分区（参考 PI-Desktop 的常规页）：外观与关闭行为。 */
 export function GeneralSection() {
   const t = useT();
@@ -129,6 +205,12 @@ export function GeneralSection() {
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-6 pb-8">
+          <section>
+            <h3 className="py-2 text-xs font-medium text-muted-foreground">
+              {t("general.workspace")}
+            </h3>
+            <WorkspaceRow />
+          </section>
           <section>
             <h3 className="py-2 text-xs font-medium text-muted-foreground">
               {t("general.appearance")}

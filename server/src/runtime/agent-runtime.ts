@@ -7,7 +7,7 @@ import {
   createUIMessageStreamResponse,
   generateText,
 } from "ai";
-import { config, workspaceDir } from "../env.js";
+import { config } from "../env.js";
 import { prisma } from "../db.js";
 import {
   resolveConfiguredSelection,
@@ -18,6 +18,7 @@ import { agentConfigService } from "./agents.js";
 import { materializeAttachments } from "./attachments.js";
 import { DelegationHub, type DelegationNotice } from "./delegation-hub.js";
 import { prepareCompactedMessages } from "./compaction.js";
+import { getWorkspaceRoot } from "./workspace.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
@@ -93,7 +94,7 @@ class AgentRuntimeService {
       requestedAgentId ?? project?.defaultAgentId ?? undefined,
     );
     const rootPath = project?.rootPath;
-    const workspacePath = rootPath ?? workspaceDir;
+    const workspacePath = rootPath ?? (await getWorkspaceRoot()).path;
     const effectiveSelection =
       selection ??
       await resolveConfiguredSelection(

@@ -4,7 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
-import { workspaceDir } from "../env.js";
+import { getWorkspaceRoot } from "../runtime/workspace.js";
 
 /** 内置浏览器面板的静态文件服务：把工作区/项目内的文件以原始字节吐出，
  * 供 iframe 预览生成的 HTML（及其相对引用的 css/js/图片）。
@@ -42,7 +42,7 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 async function allowedRoots(): Promise<string[]> {
-  const roots = [workspaceDir];
+  const roots = [(await getWorkspaceRoot()).path];
   const projects = await prisma.project.findMany({
     where: { isActive: true },
     select: { rootPath: true },

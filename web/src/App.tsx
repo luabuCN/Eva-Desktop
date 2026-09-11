@@ -40,6 +40,7 @@ import type { PreviewTarget } from "./components/BrowserPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
 import { AppSidebar } from "./components/AppSidebar";
+import { WorkspaceGate } from "./components/WorkspaceGate";
 import { Button } from "@/components/ui/button";
 import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import {
@@ -681,6 +682,8 @@ export function App() {
   const [sessionId, setSessionId] = useState(
     () => localStorage.getItem(SESSION_KEY) ?? createSessionId(),
   );
+  // 首次启动的工作区引导：未配置过默认工作区时全屏拦截，选定后放行。
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<ChatUIMessage[]>([]);
   // 当前会话的历史快照是否已从服务端加载完成；重进会话时只有在快照就绪
@@ -1144,6 +1147,9 @@ export function App() {
       </Dialog>
 
       {/* 无边框窗口的自绘控制按钮，固定在窗口右上角、浮于各顶栏之上。 */}
+      {!workspaceReady ? (
+        <WorkspaceGate onReady={() => setWorkspaceReady(true)} />
+      ) : null}
       <WindowControls />
     </SidebarProvider>
   );

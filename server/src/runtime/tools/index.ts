@@ -24,4 +24,3 @@ export { createRunContext } from "./run-context.js";
 export type { ToolDescriptor, ToolProvider } from "./registry.js";
 export { toolProviderRegistry, ToolProviderRegistry } from "./registry.js";
 export { toolRecordService, type ToolCatalogEntry } from "./tool-records.js";
-export { workspaceFileProvider } from "./fs-utils.js";

@@ -604,6 +604,24 @@ export function decideApproval(
   }).then(() => undefined);
 }
 
+export interface WorkspaceSettingInfo {
+  path: string;
+  /** 用户是否显式配置过；false = 还在用默认位置（首启引导据此触发）。 */
+  configured: boolean;
+  defaultPath: string;
+}
+
+export function getWorkspaceSetting(): Promise<WorkspaceSettingInfo> {
+  return apiFetch<WorkspaceSettingInfo>("/api/settings/workspace");
+}
+
+export function setWorkspaceSetting(path: string): Promise<WorkspaceSettingInfo> {
+  return apiFetch<WorkspaceSettingInfo>("/api/settings/workspace", {
+    method: "PUT",
+    body: JSON.stringify({ path }),
+  });
+}
+
 export interface TerminalInfo {
   id: string;
   pid: number;

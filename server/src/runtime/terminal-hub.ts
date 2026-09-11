@@ -1,5 +1,5 @@
 import path from "node:path";
-import { workspaceDir } from "../env.js";
+import { getWorkspaceRoot } from "./workspace.js";
 
 /**
  * 应用内用户终端（PTY）的后端会话中心。
@@ -205,7 +205,7 @@ export class TerminalHub {
 
     const cols = Math.min(Math.max(Math.trunc(input.cols ?? 80), 10), 500);
     const rows = Math.min(Math.max(Math.trunc(input.rows ?? 24), 4), 200);
-    const cwd = path.resolve(input.cwd?.trim() || workspaceDir);
+    const cwd = path.resolve(input.cwd?.trim() || (await getWorkspaceRoot()).path);
     const shell = defaultShell();
 
     const pty = factory(shell.file, shell.args, {

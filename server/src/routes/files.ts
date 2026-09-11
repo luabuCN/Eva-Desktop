@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
-import { workspaceDir } from "../env.js";
 import { isBinaryPath } from "../runtime/tools/fs-utils.js";
+import { getWorkspaceRoot } from "../runtime/workspace.js";
 
 export const fileRoutes = new Hono();
 
@@ -15,7 +15,8 @@ const CONTENT_MAX_BYTES = 512 * 1024;
  * path from the renderer cannot escape into arbitrary filesystem locations.
  */
 async function resolveBrowsablePath(rawPath: string | undefined): Promise<string> {
-  const candidates = [workspaceDir];
+  const workspaceRoot = (await getWorkspaceRoot()).path;
+  const candidates = [workspaceRoot];
   const projects = await prisma.project.findMany({
     where: { isActive: true },
     select: { rootPath: true },
@@ -26,7 +27,7 @@ async function resolveBrowsablePath(rawPath: string | undefined): Promise<string
 
   // Relative paths resolve against the workspace; absolute paths must land
   // inside one of the allowed roots or the containment check below fails.
-  const target = rawPath ? path.resolve(workspaceDir, rawPath) : workspaceDir;
+  const target = rawPath ? path.resolve(workspaceRoot, rawPath) : workspaceRoot;
 
   for (const root of candidates) {
     const relative = path.relative(root, target);
