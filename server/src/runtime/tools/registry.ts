@@ -3,9 +3,11 @@ import { AskUserToolProvider } from "./ask-provider.js";
 import { BuiltinToolProvider } from "./builtin-provider.js";
 import { CronToolProvider } from "./cron-provider.js";
 import { DelegationToolProvider } from "./delegation-provider.js";
+import { ExitPlanModeToolProvider } from "./exit-plan-provider.js";
 import { GitToolProvider } from "./git-provider.js";
 import { McpToolProvider } from "./mcp-provider.js";
 import { resolveToolPolicies } from "./policies.js";
+import { isCommandAllowed } from "./command-rules.js";
 import { createRunContext, type RunContext } from "./run-context.js";
 import { TaskToolProvider } from "./task-provider.js";
 import { WebSearchToolProvider } from "./websearch-provider.js";
@@ -16,6 +18,8 @@ import type {
   AskUserBridge,
   DelegationBridge,
   PermissionMode,
+  PlanApprovalBridge,
+  PlanGate,
   RuntimeTool,
   ToolPermissionMap,
   ToolPolicy,
@@ -96,6 +100,51 @@ function wrapWithApproval(
   return wrapped;
 }
 
+/**
+ * Plan-mode execution gate: mutating tools stay in the tool set (visible to
+ * the model) but refuse to run until ExitPlanMode is approved. After approval
+ * the gate re-reads the live policy (escalated mode) so approvals behave per
+ * the mode the user picked.
+ */
+function wrapWithPlanGate(
+  toolName: string,
+  tool: RuntimeTool,
+  run: RunContext,
+): RuntimeTool {
+  const inner = tool.execute;
+  if (typeof inner !== "function") return tool;
+  const gated: RuntimeTool = Object.create(Object.getPrototypeOf(tool));
+  Object.assign(gated, tool);
+  gated.execute = async (input: any, context: any) => {
+    if (!run.planGate?.approved) {
+      // 计划阶段放行只读命令（内置安全表 + 用户规则）：git log / grep
+      // 这类调研命令不拦；其余命令仍等计划获批。
+      if (toolName === "bash") {
+        const command =
+          input && typeof input === "object" && typeof input.command === "string"
+            ? input.command
+            : "";
+        if (command && (await isCommandAllowed(command, run.projectId))) {
+          return inner(input, context);
+        }
+      }
+      return {
+        blocked: true,
+        message:
+          "Plan mode is active: this tool is blocked until the user approves " +
+          "a plan. Finish researching with the read-only tools, then present " +
+          "the plan with ExitPlanMode.",
+      };
+    }
+    const policy = run.policyFor(toolName);
+    if (policy.requireApproval && run.approvals) {
+      await requestApproval(run.approvals, toolName, input);
+    }
+    return inner(input, context);
+  };
+  return gated;
+}
+
 export interface PoliciesForInput {
   mode: PermissionMode;
   readOnly?: boolean;
@@ -165,6 +214,8 @@ export class ToolProviderRegistry {
     disabledTools?: ReadonlySet<string>;
     approvals?: ApprovalBridge;
     askUser?: AskUserBridge;
+    planApprovals?: PlanApprovalBridge;
+    planGate?: PlanGate;
     delegate?: DelegationBridge;
     signal?: AbortSignal;
   }): RunContext {
@@ -189,14 +240,18 @@ export class ToolProviderRegistry {
       }),
       approvals: input.approvals,
       askUser: input.askUser,
+      planApprovals: input.planApprovals,
+      planGate: input.planGate,
       delegate: input.delegate,
       signal: input.signal,
     });
   }
 
   /** Derive a sub-agent context from a parent run, re-resolving policies for
-   * the sub-agent's own readOnly posture. Sub-agents share approvals and the
-   * abort signal but skip per-conversation task tools. */
+   * the sub-agent's own readOnly posture. Sub-agents share approvals, the
+   * abort signal, and the plan gate (so a parent's approval opens their
+   * mutating tools too) but skip per-conversation task tools and every
+   * bridge that could block on user input. */
   deriveContext(parent: RunContext, changes: { readOnly: boolean }): RunContext {
     if (changes.readOnly === parent.readOnly && parent.subAgent) return parent;
     return createRunContext({
@@ -204,8 +259,11 @@ export class ToolProviderRegistry {
       readOnly: changes.readOnly,
       subAgent: true,
       // 子智能体不能阻塞在用户输入上，也不能再生委派：
-      // askUser 和 Delegate 只属于主智能体回合。
+      // askUser / ExitPlanMode / Delegate 只属于主智能体回合。
+      // planGate 故意保留同一引用：计划获批后委派的门控同步放开。
       askUser: undefined,
+      planApprovals: undefined,
+      escalateFromPlan: undefined,
       delegate: undefined,
       toolPolicies: this.policiesFor({
         mode: parent.permissionMode,
@@ -217,15 +275,23 @@ export class ToolProviderRegistry {
   }
 
   /** Merge every provider's tools for one run, filtered by policy and gated
-   * by the approval wrapper. This is the single merge point for builtin,
-   * workspace, and dynamic MCP/skill tools. */
+   * by the approval wrapper (or, in plan mode, the plan gate). This is the
+   * single merge point for builtin, workspace, and dynamic MCP/skill tools. */
   async createToolSet(run: RunContext): Promise<Record<string, RuntimeTool>> {
+    const mutatingNames = new Set(
+      this.descriptors().filter((descriptor) => descriptor.mutating).map((d) => d.name),
+    );
+    const planGated = run.permissionMode === "plan" && run.planGate !== undefined;
     const tools: Record<string, RuntimeTool> = {};
     for (const provider of this.providers.values()) {
       const contributed = await provider.createTools(run);
       for (const [name, tool] of Object.entries(contributed)) {
         const policy = run.policyFor(name);
         if (!policy.enabled) continue;
+        if (planGated && mutatingNames.has(name)) {
+          tools[name] = wrapWithPlanGate(name, tool, run);
+          continue;
+        }
         tools[name] =
           policy.requireApproval && run.approvals
             ? wrapWithApproval(name, tool, run.approvals)
@@ -245,6 +311,7 @@ toolProviderRegistry.register(new WorkspaceToolProvider());
 toolProviderRegistry.register(new GitToolProvider());
 toolProviderRegistry.register(new TaskToolProvider());
 toolProviderRegistry.register(new AskUserToolProvider());
+toolProviderRegistry.register(new ExitPlanModeToolProvider());
 toolProviderRegistry.register(new DelegationToolProvider());
 toolProviderRegistry.register(new WebSearchToolProvider());
 toolProviderRegistry.register(new WikiToolProvider());

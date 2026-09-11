@@ -70,7 +70,7 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   );
 }
 
-export const PERMISSION_MODES = ["confirm", "auto_edit", "full"] as const;
+export const PERMISSION_MODES = ["plan", "confirm", "auto_edit", "full"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
@@ -189,6 +189,17 @@ export interface AskUserInfo {
   createdAt: string;
 }
 
+export interface PlanApprovalInfo {
+  id: string;
+  runId: string;
+  plan: string;
+  feedback?: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  /** approve → auto_edit；approve_full → full；reject 时为空。 */
+  action?: "approve" | "approve_full" | "reject" | null;
+  createdAt: string;
+}
+
 export interface RunInfo {
   id: string;
   conversationId: string;
@@ -204,6 +215,7 @@ export interface RunInfo {
   completedAt?: string | null;
   approvals: ApprovalInfo[];
   asks?: AskUserInfo[];
+  plans?: PlanApprovalInfo[];
 }
 
 export interface AgentTaskInfo {
@@ -574,7 +586,12 @@ export function listConversationTasks(conversationId: string): Promise<AgentTask
     .then((data) => data.tasks);
 }
 
-export type ApprovalAction = "approve" | "approve_always" | "reject";
+export type ApprovalAction =
+  | "approve"
+  | "approve_always"
+  | "reject"
+  /** bash 专用：从当前命令推导保守前缀规则并放行（仅本次批准不放开整个工具）。 */
+  | "approve_command_always";
 
 export function decideApproval(
   runId: string,
@@ -584,6 +601,97 @@ export function decideApproval(
   return apiFetch(`/api/runs/${runId}/approvals/${approvalId}`, {
     method: "POST",
     body: JSON.stringify({ action }),
+  }).then(() => undefined);
+}
+
+export interface TerminalInfo {
+  id: string;
+  pid: number;
+  title: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  createdAt: number;
+  exited: boolean;
+  exitCode?: number;
+}
+
+export function listTerminals(): Promise<TerminalInfo[]> {
+  return apiFetch<{ terminals: TerminalInfo[] }>("/api/terminal")
+    .then((data) => data.terminals);
+}
+
+export function createTerminal(input: {
+  cwd?: string;
+  title?: string;
+  cols?: number;
+  rows?: number;
+}): Promise<TerminalInfo> {
+  return apiFetch<{ terminal: TerminalInfo }>("/api/terminal", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.terminal);
+}
+
+export function sendTerminalInput(id: string, data: string): Promise<void> {
+  return apiFetch(`/api/terminal/${id}/input`, {
+    method: "POST",
+    body: JSON.stringify({ data }),
+  }).then(() => undefined);
+}
+
+export function resizeTerminal(id: string, cols: number, rows: number): Promise<void> {
+  return apiFetch(`/api/terminal/${id}/resize`, {
+    method: "POST",
+    body: JSON.stringify({ cols, rows }),
+  }).then(() => undefined);
+}
+
+export function killTerminal(id: string): Promise<void> {
+  return apiFetch(`/api/terminal/${id}`, { method: "DELETE" }).then(() => undefined);
+}
+
+export interface CommandRuleInfo {
+  id: string;
+  pattern: string;
+  matchType: "prefix" | "exact";
+  projectId?: string | null;
+  projectName?: string | null;
+  createdAt: string;
+}
+
+export function listCommandRules(): Promise<CommandRuleInfo[]> {
+  return apiFetch<{ rules: CommandRuleInfo[] }>("/api/command-rules")
+    .then((data) => data.rules);
+}
+
+export function createCommandRule(input: {
+  pattern: string;
+  matchType: "prefix" | "exact";
+  projectId?: string | null;
+}): Promise<CommandRuleInfo> {
+  return apiFetch<{ rule: CommandRuleInfo }>("/api/command-rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.rule);
+}
+
+export function deleteCommandRule(id: string): Promise<void> {
+  return apiFetch(`/api/command-rules/${id}`, { method: "DELETE" }).then(() => undefined);
+}
+
+/** ExitPlanMode 计划卡裁决：approve → auto_edit，approve_full → full，reject 可附反馈。 */
+export type PlanApprovalAction = "approve" | "approve_full" | "reject";
+
+export function decidePlan(
+  runId: string,
+  planId: string,
+  action: PlanApprovalAction,
+  feedback?: string,
+): Promise<void> {
+  return apiFetch(`/api/runs/${runId}/plans/${planId}`, {
+    method: "POST",
+    body: JSON.stringify({ action, feedback }),
   }).then(() => undefined);
 }
 

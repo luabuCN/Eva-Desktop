@@ -14,6 +14,7 @@ import {
   abortConversation,
   answerAsk,
   decideApproval,
+  decidePlan,
   deleteProject as apiDeleteProject,
   deleteSession as apiDeleteSession,
   isPermissionMode,
@@ -21,6 +22,8 @@ import {
   updateSession,
   type ApprovalAction,
   type AskUserInfo,
+  type PlanApprovalAction,
+  type PlanApprovalInfo,
   type ModelSelection,
   type PermissionMode,
   type ProjectInfo,
@@ -344,6 +347,12 @@ function SessionView({
       .map((ask) => ({ run, ask })),
   );
 
+  const pendingPlans = runs.flatMap((run) =>
+    (run.plans ?? [])
+      .filter((plan) => plan.status === "pending")
+      .map((plan) => ({ run, plan })),
+  );
+
   // 模型目录里的上下文窗口大小，供用量页计算上下文占用。
   const contextWindow = useMemo(() => {
     if (!displaySelection) return undefined;
@@ -429,6 +438,37 @@ function SessionView({
       mark("answered");
       try {
         await answerAsk(runId, askId, answers);
+      } catch {
+        mark("pending");
+      }
+    },
+    [],
+  );
+
+  // 计划卡裁决：先本地置为已裁决让卡片立即收起，失败回退 pending 重试。
+  const handlePlanDecision = useCallback(
+    async (
+      runId: string,
+      planId: string,
+      action: PlanApprovalAction,
+      feedback?: string,
+    ) => {
+      const mark = (status: PlanApprovalInfo["status"]) =>
+        setRuns((current) =>
+          current.map((run) =>
+            run.id !== runId
+              ? run
+              : {
+                  ...run,
+                  plans: (run.plans ?? []).map((plan) =>
+                    plan.id === planId ? { ...plan, status } : plan,
+                  ),
+                },
+          ),
+        );
+      mark(action === "reject" ? "rejected" : "approved");
+      try {
+        await decidePlan(runId, planId, action, feedback);
       } catch {
         mark("pending");
       }
@@ -595,6 +635,10 @@ function SessionView({
           pendingAsks={pendingAsks}
           onAskAnswer={(runId, askId, answers) =>
             void handleAskAnswer(runId, askId, answers)
+          }
+          pendingPlans={pendingPlans}
+          onPlanDecision={(runId, planId, action, feedback) =>
+            void handlePlanDecision(runId, planId, action, feedback)
           }
           turnNote={turnNote}
           onOpenLink={handleOpenLink}

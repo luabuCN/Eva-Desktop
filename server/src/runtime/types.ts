@@ -20,7 +20,7 @@ export function thinkingModeForEffort(effort: ReasoningEffort): ThinkingMode {
   return effort === "off" ? "fast" : "deep";
 }
 
-export const PERMISSION_MODES = ["confirm", "auto_edit", "full"] as const;
+export const PERMISSION_MODES = ["plan", "confirm", "auto_edit", "full"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 

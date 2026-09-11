@@ -8,6 +8,7 @@ import {
   GitBranchIcon,
   GlobeIcon,
   ListTodoIcon,
+  SquareTerminalIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   WrenchIcon,
@@ -30,6 +31,7 @@ import {
 import { BrowserPane, type PreviewTarget } from "@/components/BrowserPane";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { GitPanel } from "@/components/GitPanel";
+import { TerminalPane } from "@/components/TerminalPane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -53,7 +55,7 @@ import {
 } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "browser" | "tasks" | "changes" | "git" | "tools" | "usage";
+export type RightTab = "files" | "browser" | "terminal" | "tasks" | "changes" | "git" | "tools" | "usage";
 
 export interface RightPanelProps {
   messages: ChatUIMessage[];
@@ -112,6 +114,10 @@ function RightPanelBase({
             <GlobeIcon className="size-3.5" />
             浏览器
           </TabsTrigger>
+          <TabsTrigger value="terminal" className={TAB_TRIGGER_CLASS}>
+            <SquareTerminalIcon className="size-3.5" />
+            终端
+          </TabsTrigger>
           <TabsTrigger value="tasks" className={TAB_TRIGGER_CLASS}>
             <ListTodoIcon className="size-3.5" />
             任务
@@ -146,6 +152,14 @@ function RightPanelBase({
           className="m-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden"
         >
           <BrowserPane target={previewTarget} />
+        </TabsContent>
+        {/* forceMount 保持 PTY 会话与输出流跨标签存活（同浏览器页签） */}
+        <TabsContent
+          value="terminal"
+          forceMount
+          className="m-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden"
+        >
+          <TerminalPane key={project?.id ?? "workspace"} project={project} />
         </TabsContent>
         <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <TaskList tasks={tasks} />

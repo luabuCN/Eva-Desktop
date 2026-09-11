@@ -5,6 +5,7 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  generateText,
 } from "ai";
 import { config, workspaceDir } from "../env.js";
 import { prisma } from "../db.js";
@@ -16,9 +17,11 @@ import type { ChatUIMessage } from "../chat-types.js";
 import { agentConfigService } from "./agents.js";
 import { materializeAttachments } from "./attachments.js";
 import { DelegationHub, type DelegationNotice } from "./delegation-hub.js";
+import { prepareCompactedMessages } from "./compaction.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
+import { loadProjectDocs, projectDocsSection } from "./project-docs.js";
 import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
 import { isAutoIngestEnabledFor, wikiQueue } from "../wiki/wiki-queue.js";
@@ -90,6 +93,7 @@ class AgentRuntimeService {
       requestedAgentId ?? project?.defaultAgentId ?? undefined,
     );
     const rootPath = project?.rootPath;
+    const workspacePath = rootPath ?? workspaceDir;
     const effectiveSelection =
       selection ??
       await resolveConfiguredSelection(
@@ -126,7 +130,7 @@ class AgentRuntimeService {
       selection: effectiveSelection,
       agentId: definition.id,
     });
-    const activeRun = runService.registerAbortSource(run.id);
+    const activeRun = runService.registerAbortSource(run.id, context.projectId);
 
     try {
       // Global permission mode sets the baseline; read-only agents cannot mutate;
@@ -139,7 +143,7 @@ class AgentRuntimeService {
         conversationId: context.conversationId,
         runId: run.id,
         projectId: context.projectId,
-        workspacePath: rootPath ?? workspaceDir,
+        workspacePath,
         agentId: definition.id,
         mode: permissionMode,
         readOnly: definition.readOnly,
@@ -147,15 +151,42 @@ class AgentRuntimeService {
         disabledTools,
         approvals: activeRun.approvals,
         askUser: activeRun.asks,
+        planApprovals: activeRun.plans,
+        // plan 模式门控：主智能体与所有委派共享同一对象；ExitPlanMode
+        // 获批后置 approved，整个运行的变更类工具即刻放开。
+        planGate: permissionMode === "plan" ? { approved: false } : undefined,
         signal: activeRun.signal,
       });
+      // 计划获批后把整个运行的策略就地重解析为升级后的权限模式
+      // （policyFor 闭包引用同一 map，就地合并即可生效）。委派在获批
+      // 之后派生的会直接按新模式解析；之前派生的靠共享门控放开，其
+      // 审批要求保持派生时的安全默认。
+      if (permissionMode === "plan") {
+        runContext.escalateFromPlan = (mode) => {
+          Object.assign(
+            runContext.toolPolicies,
+            toolProviderRegistry.policiesFor({
+              mode,
+              readOnly: runContext.readOnly,
+              overrides: runContext.permissionOverrides,
+              disabledTools: runContext.disabledTools,
+            }),
+          );
+          runContext.permissionMode = mode;
+        };
+      }
+      // 项目指令文件（AGENTS.md / CLAUDE.md / EVA.md）：每回合读取一次，
+      // 注入主智能体系统提示，并随委派传给子智能体，保证项目约定全链路生效。
+      const projectDocs = await loadProjectDocs(workspacePath);
+
       // 委派中心：Delegate 工具的后端。定义来自子智能体目录（内置 + 自定义），
       // 每个运行一个实例；运行结束（完成或中止）时停掉所有仍在跑的委派。
       // 注意必须在 createToolSet 之前注入：DelegationToolProvider 依据桥是否存在决定贡献哪些工具。
       const subAgentDefinitions = await subAgentService.activeList();
       const delegationHub = new DelegationHub({
         definitions: subAgentDefinitions,
-        workspacePath: rootPath ?? workspaceDir,
+        workspacePath,
+        projectDocs,
         runContext,
         mode,
         effort: reasoningEffort,
@@ -172,6 +203,21 @@ class AgentRuntimeService {
       // 显式推理等级优先；旧客户端的 thinkingMode=deep 视为开启深度思考。
       const deepThinking = reasoningEffort ? reasoningEffort !== "off" : mode === "deep";
 
+      // plan 模式的行为指引：先只读调研、用 ExitPlanMode 呈交计划，获批
+      // 前变更类工具会被门控拦下（返回引导性错误而不是异常）。
+      const planModeInstructions =
+        permissionMode === "plan"
+          ? "Plan mode is active: research first, then present your plan with the " +
+            "ExitPlanMode tool before changing anything. Every tool that modifies " +
+            "files, runs commands, or mutates state is blocked until the user " +
+            "approves; read, search, task-list, delegation, and askUser tools work " +
+            "normally. Build the plan from evidence you verified yourself (read " +
+            "the files, run searches) — do not speculate about code you have not " +
+            "seen. The plan is concise markdown: the goal, ordered steps, files to " +
+            "create or edit, commands to run, and how you will verify. If the user " +
+            "rejects it, incorporate the feedback and present a revised plan."
+          : undefined;
+
       // 已启用技能逐目录注入：Mastra 负责注入 <available_skills> 目录与
       // skill / skill_read 工具；同名冲突已在服务层按来源优先级去重。
       const activeSkills = await skillService.activeSkills();
@@ -180,10 +226,16 @@ class AgentRuntimeService {
         id: definition.id,
         name: definition.name,
         description: definition.description,
-        instructions:
+        instructions: [
+          definition.instructions,
           deepThinking
-            ? `${definition.instructions} Think carefully before acting; reason through edge cases and verify assumptions when useful.`
-            : definition.instructions,
+            ? "Think carefully before acting; reason through edge cases and verify assumptions when useful."
+            : undefined,
+          planModeInstructions,
+          projectDocs ? projectDocsSection(projectDocs) : undefined,
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join("\n\n"),
         model,
         tools,
         skills: activeSkills.map((skill) => skill.dir),
@@ -196,12 +248,38 @@ class AgentRuntimeService {
       // 副本里替换为路径提示；UI 消息保持原 file part，回显不受影响。
       const { messages: attachmentBound } = await materializeAttachments(
         messages,
-        rootPath ?? workspaceDir,
+        workspacePath,
       );
       // "/<技能 id> 参数" 的显式调用同样只展开在模型副本里，历史回显保持
       // 紧凑的斜杠命令文本。
       const modelBoundMessages = await skillService.applyInvocation(attachmentBound);
-      const modelMessages = await convertToModelMessages(modelBoundMessages, {
+
+      // 上下文压缩：估算 token 超过阈值时，把较早消息总结成持久摘要
+      // （会话级压缩点），模型副本变为「摘要 + 近期消息」；UI 历史、
+      // 回放与 wiki 总结区间都基于完整消息数组，不受影响。摘要用会话
+      // 模型关闭思考生成；任何失败都退回完整历史，由 TokenLimiterProcessor
+      // 硬截断兜底。
+      let compactedMessages = modelBoundMessages;
+      try {
+        const outcome = await prepareCompactedMessages({
+          conversationId: context.conversationId,
+          messages: modelBoundMessages,
+          contextWindow: config.contextWindow,
+          summarize: async (system, prompt) => {
+            const { text } = await generateText({
+              model: await createModel(mode, effectiveSelection, "off"),
+              system,
+              prompt,
+            });
+            return text;
+          },
+        });
+        compactedMessages = outcome.messages;
+      } catch (error) {
+        console.error("context compaction failed, falling back to full history", error);
+      }
+
+      const modelMessages = await convertToModelMessages(compactedMessages, {
         ignoreIncompleteToolCalls: true,
       });
       const mastraStream = await agent.stream(modelMessages, {

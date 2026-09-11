@@ -4,6 +4,8 @@ import type {
   AskUserBridge,
   DelegationBridge,
   PermissionMode,
+  PlanApprovalBridge,
+  PlanGate,
   ToolPermissionMap,
   ToolPolicy,
 } from "./types.js";
@@ -32,6 +34,12 @@ export interface RunContextInit {
   approvals?: ApprovalBridge;
   /** askUser 工具的交互桥；子智能体上下文不带（派生时置空），避免后台任务阻塞在用户输入上。 */
   askUser?: AskUserBridge;
+  /** ExitPlanMode 工具的裁决桥；仅 plan 模式的主智能体上下文携带。 */
+  planApprovals?: PlanApprovalBridge;
+  /** plan 模式门控：整个运行（含委派）共享，ExitPlanMode 获批后放开。 */
+  planGate?: PlanGate;
+  /** 计划获批后把整个运行的工具策略重解析为升级后的权限模式。 */
+  escalateFromPlan?: (mode: PermissionMode) => void;
   /** Delegate 工具的委派桥；子智能体上下文不带，委派不能再生委派。 */
   delegate?: DelegationBridge;
   signal?: AbortSignal;

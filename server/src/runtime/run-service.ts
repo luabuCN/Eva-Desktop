@@ -7,7 +7,10 @@ import {
   type ApprovalDecision,
   type AskUserBridge,
   type AskUserQuestion,
+  type PlanApprovalBridge,
+  type PlanDecision,
 } from "./tools/index.js";
+import { isCommandAllowed } from "./tools/command-rules.js";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_approval"] as const;
 
@@ -25,6 +28,7 @@ interface ActiveRunHandle {
   abort(): void;
   approvals: InteractiveApprovalBridge;
   asks: AskUserBridge;
+  plans: InteractivePlanBridge;
 }
 
 function messageTitle(messages: ChatUIMessage[]): string | undefined {
@@ -50,6 +54,7 @@ class InteractiveApprovalBridge {
   constructor(
     private readonly runId: string,
     private readonly signal?: AbortSignal,
+    private readonly projectId?: string,
   ) {}
 
   allowAlways(toolName: string) {
@@ -60,6 +65,24 @@ class InteractiveApprovalBridge {
     if (this.alwaysAllowed.has(toolName)) {
       return { kind: "approved" };
     }
+
+    // 命令级放行：bash 的审批请求先过 allowlist（内置只读表 + 用户规则），
+    // 命中的免卡直接执行——弹卡的是真正需要看的命令。
+    if (toolName === "bash") {
+      try {
+        const parsed: unknown = JSON.parse(input);
+        const command =
+          parsed && typeof parsed === "object" && typeof (parsed as { command?: unknown }).command === "string"
+            ? (parsed as { command: string }).command
+            : "";
+        if (command && (await isCommandAllowed(command, this.projectId))) {
+          return { kind: "approved" };
+        }
+      } catch {
+        // 输入不是合法 JSON 时照常弹卡。
+      }
+    }
+
     const approval = await prisma.toolApproval.create({
       data: { runId: this.runId, toolName, input },
     });
@@ -149,6 +172,49 @@ class InteractiveAskBridge implements AskUserBridge {
   }
 }
 
+/**
+ * ExitPlanMode 工具的裁决桥：与 askUser 同套路（落一行 pending 记录 +
+ * 500ms 轮询），同样不设有效期——用户不决定就等着，卡片跨刷新/后台运行
+ * 都在。中止时按「未裁决」收尾（返回 null，工具按拒绝处理）。
+ */
+class InteractivePlanBridge implements PlanApprovalBridge {
+  constructor(
+    private readonly runId: string,
+    private readonly signal?: AbortSignal,
+  ) {}
+
+  async request(plan: string): Promise<PlanDecision | null> {
+    const prompt = await prisma.planApprovalPrompt.create({
+      data: { runId: this.runId, plan },
+    });
+    await runService.updateStatus(this.runId, "waiting_approval");
+
+    while (!this.signal?.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const row = await prisma.planApprovalPrompt.findUnique({ where: { id: prompt.id } });
+      if (!row) break;
+      if (row.status === "approved" && (row.action === "approve" || row.action === "approve_full")) {
+        await runService.updateStatus(this.runId, "running");
+        return { action: row.action };
+      }
+      if (row.status === "rejected") {
+        await runService.updateStatus(this.runId, "running");
+        return { action: "reject", feedback: row.feedback ?? undefined };
+      }
+    }
+
+    await prisma.planApprovalPrompt.update({
+      where: { id: prompt.id },
+      data: { status: "cancelled" },
+    }).catch(() => undefined);
+    // 运行已被中止时不再改状态，收尾交给 finish(..., "aborted")。
+    if (!this.signal?.aborted) {
+      await runService.updateStatus(this.runId, "running");
+    }
+    return null;
+  }
+}
+
 class ThreadRunService {
   private readonly activeRuns = new Map<string, ActiveRunHandle>();
 
@@ -189,14 +255,16 @@ class ThreadRunService {
    * 只有显式调用 abort()（停止按钮 → POST /api/runs/conversations/:id/abort）
    * 才会真正中止。
    */
-  registerAbortSource(runId: string) {
+  registerAbortSource(runId: string, projectId?: string) {
     const controller = new AbortController();
-    const approvals = new InteractiveApprovalBridge(runId, controller.signal);
+    const approvals = new InteractiveApprovalBridge(runId, controller.signal, projectId);
     const asks = new InteractiveAskBridge(runId, controller.signal);
+    const plans = new InteractivePlanBridge(runId, controller.signal);
     const handle: ActiveRunHandle = {
       abort: () => controller.abort(),
       approvals,
       asks,
+      plans,
     };
     this.activeRuns.set(runId, handle);
 
@@ -204,6 +272,7 @@ class ThreadRunService {
       signal: controller.signal,
       approvals,
       asks,
+      plans,
       cleanup: () => {
         this.activeRuns.delete(runId);
       },
@@ -309,6 +378,10 @@ class ThreadRunService {
           orderBy: { createdAt: "desc" },
           take: 10,
         },
+        plans: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
       },
     });
   }
@@ -319,6 +392,7 @@ class ThreadRunService {
       include: {
         approvals: { orderBy: { createdAt: "desc" }, take: 50 },
         asks: { orderBy: { createdAt: "desc" }, take: 50 },
+        plans: { orderBy: { createdAt: "desc" }, take: 50 },
         events: { orderBy: { sequence: "asc" }, take: 200 },
       },
     });

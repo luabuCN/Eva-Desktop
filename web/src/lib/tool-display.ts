@@ -196,6 +196,18 @@ export function describeTool(part: ToolPart): ToolDisplay {
         summary: truncateSummary(first ?? ""),
       };
     }
+    case "ExitPlanMode": {
+      const planText = pickString(input, ["plan"]) ?? "";
+      const firstPlanLine = planText
+        .split("\n")
+        .find((line) => line.trim().length > 0);
+      return {
+        action: "use",
+        verb: "呈交计划",
+        runningVerb: running("等待计划批准"),
+        summary: truncateSummary(firstPlanLine ?? ""),
+      };
+    }
     case "Delegate": {
       const agent = pickString(input, ["agent"]) ?? "";
       const task = firstLine(pickString(input, ["task"]) ?? "");

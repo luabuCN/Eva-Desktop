@@ -109,11 +109,19 @@ export function ApprovalPrompt({ run, approval, remainingCount, onDecision }: Ap
 
   const options: Array<{ action: ApprovalAction; label: string; hint: string }> = [
     { action: "approve", label: "允许", hint: "仅允许这一次" },
-    {
-      action: "approve_always",
-      label: "始终允许",
-      hint: run.projectId ? "本项目后续相同操作不再询问" : "本次任务后续相同操作不再询问",
-    },
+    approval.toolName === "bash"
+      ? {
+          action: "approve_command_always",
+          label: "始终允许此类命令",
+          hint: run.projectId
+            ? "按命令开头建本项目放行规则"
+            : "按命令开头建全局放行规则",
+        }
+      : {
+          action: "approve_always",
+          label: "始终允许",
+          hint: run.projectId ? "本项目后续相同操作不再询问" : "本次任务后续相同操作不再询问",
+        },
     { action: "reject", label: "拒绝", hint: "这次先拒绝" },
   ];
 

@@ -41,6 +41,30 @@ export interface AskUserBridge {
   ask(questions: AskUserQuestion[]): Promise<Array<string[] | null>>;
 }
 
+/** ExitPlanMode 的用户裁决：approve → auto_edit，approve_full → full。 */
+export type PlanDecision =
+  | { action: "approve" }
+  | { action: "approve_full" }
+  | { action: "reject"; feedback?: string };
+
+/**
+ * Bridge that pauses the ExitPlanMode tool until the user decides on the
+ * plan through the run's pending plan prompt. Null means the run was
+ * stopped (treated as a rejection without feedback).
+ */
+export interface PlanApprovalBridge {
+  request(plan: string): Promise<PlanDecision | null>;
+}
+
+/**
+ * Plan 模式的执行期门控：主智能体与所有委派子智能体共享同一个对象，
+ * ExitPlanMode 获批后置 approved，门控即刻对整个运行放开。
+ */
+export interface PlanGate {
+  approved: boolean;
+  escalatedMode?: PermissionMode;
+}
+
 /** One background delegation started by the Delegate tool. */
 export interface DelegationRecord {
   delegationId: string;

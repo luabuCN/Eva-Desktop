@@ -178,6 +178,39 @@ export async function ensureSchema() {
     'CREATE INDEX IF NOT EXISTS "AskUserPrompt_runId_status_idx" ON "AskUserPrompt" ("runId", "status")',
   );
   await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "PlanApprovalPrompt" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "runId" TEXT NOT NULL,
+      "plan" TEXT NOT NULL,
+      "feedback" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'pending',
+      "action" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "PlanApprovalPrompt_runId_fkey"
+        FOREIGN KEY ("runId") REFERENCES "ThreadRun"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "PlanApprovalPrompt_runId_status_idx" ON "PlanApprovalPrompt" ("runId", "status")',
+  );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "CommandRule" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "pattern" TEXT NOT NULL,
+      "matchType" TEXT NOT NULL DEFAULT 'prefix',
+      "projectId" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "CommandRule_projectId_fkey"
+        FOREIGN KEY ("projectId") REFERENCES "Project"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "CommandRule_projectId_idx" ON "CommandRule" ("projectId")',
+  );
+  await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "AgentTask" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "conversationId" TEXT NOT NULL,
@@ -490,6 +523,24 @@ export async function ensureSchema() {
   );
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "WikiIngestJob_conversationId_idx" ON "WikiIngestJob" ("conversationId")',
+  );
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ConversationCompaction" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "conversationId" TEXT NOT NULL,
+      "boundaryMessageId" TEXT NOT NULL,
+      "upToSeq" INTEGER NOT NULL,
+      "summary" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "ConversationCompaction_conversationId_fkey"
+        FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "ConversationCompaction_conversationId_key" ON "ConversationCompaction" ("conversationId")',
   );
 
   for (const agent of builtInAgentRows()) {

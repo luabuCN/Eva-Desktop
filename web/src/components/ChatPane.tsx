@@ -37,6 +37,8 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import type {
   ApprovalAction,
+  PlanApprovalAction,
+  PlanApprovalInfo,
   ApprovalInfo,
   AskUserInfo,
   ModelSelection,
@@ -56,6 +58,7 @@ import { AgentSelector } from "./AgentSelector";
 import { ProjectSelector } from "./ProjectSelector";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 import { AskUserPrompt } from "./AskUserPrompt";
+import { PlanApprovalPrompt } from "./PlanApprovalPrompt";
 import { PermissionModeSelector } from "./PermissionModeSelector";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 
@@ -149,6 +152,14 @@ export interface ChatPaneProps {
     askId: string,
     answers: Array<string[] | null>,
   ) => void;
+  /** ExitPlanMode 工具挂起的计划审批卡（同样由运行轮询驱动）。 */
+  pendingPlans: Array<{ run: RunInfo; plan: PlanApprovalInfo }>;
+  onPlanDecision: (
+    runId: string,
+    planId: string,
+    action: PlanApprovalAction,
+    feedback?: string,
+  ) => void;
   turnNote?: TurnOutcomeNote;
   /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
   onOpenLink?: (url: string) => void;
@@ -177,7 +188,9 @@ export function ChatPane({
   onProjectCreated,
   pendingApprovals,
   onApprovalDecision,
+  pendingPlans,
   pendingAsks,
+  onPlanDecision,
   onAskAnswer,
   turnNote,
   onOpenLink,
@@ -221,6 +234,11 @@ export function ChatPane({
     a.ask.createdAt.localeCompare(b.ask.createdAt),
   );
   const activeAsk = sortedAsks[0];
+  // 计划卡同理：最早一张先裁决。
+  const sortedPlans = [...pendingPlans].sort((a, b) =>
+    a.plan.createdAt.localeCompare(b.plan.createdAt),
+  );
+  const activePlan = sortedPlans[0];
 
   // 聊天里的链接（markdown/自动识别的 URL）默认会走系统浏览器打开；
   // 拦截后送进内置浏览器面板，和预览行为保持一致。
@@ -431,6 +449,16 @@ export function ChatPane({
                 ask={activeAsk.ask}
                 onSubmit={(answers) =>
                   onAskAnswer(activeAsk.run.id, activeAsk.ask.id, answers)
+                }
+              />
+            </div>
+          ) : null}
+          {activePlan ? (
+            <div className="mb-12">
+              <PlanApprovalPrompt
+                plan={activePlan.plan}
+                onSubmit={(action, feedback) =>
+                  onPlanDecision(activePlan.run.id, activePlan.plan.id, action, feedback)
                 }
               />
             </div>

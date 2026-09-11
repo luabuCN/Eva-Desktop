@@ -5,6 +5,7 @@ import { config } from "./env.js";
 import { ensureSchema } from "./db.js";
 import { cronService } from "./runtime/cron-service.js";
 import { mcpManager } from "./runtime/mcp-manager.js";
+import { terminalHub } from "./runtime/terminal-hub.js";
 import { toolRecordService } from "./runtime/tools/tool-records.js";
 import { wikiQueue } from "./wiki/wiki-queue.js";
 
@@ -62,6 +63,7 @@ async function main() {
 }
 
 function shutdown() {
+  terminalHub.dispose();
   mcpManager.closeAll();
   server?.close();
   process.exit(0);

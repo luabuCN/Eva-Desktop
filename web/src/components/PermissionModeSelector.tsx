@@ -2,6 +2,7 @@ import {
   CheckIcon,
   CircleAlertIcon,
   HandIcon,
+  ListTodoIcon,
   SquarePenIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -19,6 +20,11 @@ const MODES: Record<
   PermissionMode,
   { label: string; hint: string; icon: LucideIcon }
 > = {
+  plan: {
+    label: "计划模式",
+    hint: "先调研出计划，批准后再动手",
+    icon: ListTodoIcon,
+  },
   confirm: { label: "变更前确认", hint: "改动前先问我", icon: HandIcon },
   auto_edit: {
     label: "自动编辑",
@@ -28,7 +34,7 @@ const MODES: Record<
   full: { label: "完全访问", hint: "自动执行，不再询问", icon: CircleAlertIcon },
 };
 
-const MODE_ORDER: PermissionMode[] = ["confirm", "auto_edit", "full"];
+const MODE_ORDER: PermissionMode[] = ["plan", "confirm", "auto_edit", "full"];
 
 export interface PermissionModeSelectorProps {
   value: PermissionMode;
@@ -50,7 +56,7 @@ export function PermissionModeSelector({
         <PromptInputButton
           disabled={disabled}
           tooltip="权限模式：决定哪些操作需要确认"
-          variant={value === "auto_edit" ? "secondary" : "ghost"}
+          variant={value === "auto_edit" || value === "plan" ? "secondary" : "ghost"}
           className={cn(value === "full" && "text-primary hover:text-primary")}
         >
           <CurrentIcon className="size-4" />

@@ -22,6 +22,7 @@ model Conversation {
   runs        ThreadRun[]
   tasks       AgentTask[]
   changes     FileChange[]
+  compaction  ConversationCompaction?
 }
 
 model StoredMessage {
@@ -36,6 +37,20 @@ model StoredMessage {
 
   @@unique([conversationId, kind, sequence])
   @@index([conversationId, kind, sequence])
+}
+
+/// 会话上下文压缩点：summary 覆盖 boundaryMessageId 之前的全部消息，
+/// 之后各回合的模型副本 = 压缩摘要 + 边界之后的消息；UI 历史不受影响。
+/// upToSeq 是压缩时消息数组的下标，仅在 boundaryMessageId 匹配不到时兜底。
+model ConversationCompaction {
+  id                String       @id @default(uuid())
+  conversationId    String       @unique
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  boundaryMessageId String
+  upToSeq           Int
+  summary           String
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 }
 
 /// 服务端键值设置（如 wiki.autoIngest 对话自动总结开关）。表由
@@ -78,6 +93,7 @@ model Project {
   runs              ThreadRun[]
   crons             CronJob[]
   mcpServers        McpServer[]
+  commandRules      CommandRule[]
 }
 
 /// 用户配置的 MCP 服务器。projectId 为空表示全局级（所有项目可见），
@@ -157,6 +173,7 @@ model ThreadRun {
   events         RunEvent[]
   approvals      ToolApproval[]
   asks           AskUserPrompt[]
+  plans          PlanApprovalPrompt[]
   tasks          AgentTask[]
   changes        FileChange[]
 
@@ -189,6 +206,37 @@ model ToolApproval {
   decidedAt  DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+
+  @@index([runId, status])
+}
+
+/// bash 命令级放行规则：pattern 按空白分词后做 token 前缀/完全匹配
+/// （不区分大小写）。projectId 为空表示全局规则。内置只读安全表在
+/// runtime/tools/command-rules.ts，不落库。
+model CommandRule {
+  id        String   @id @default(uuid())
+  pattern   String
+  matchType String   @default("prefix")
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+/// ExitPlanMode 工具挂起的计划审批：模型呈交 markdown 计划后落一行
+/// pending 记录，客户端通过 POST /api/runs/:id/plans/:planId 裁决。
+/// action: approve → 升级 auto_edit；approve_full → 升级 full；reject 附反馈。
+model PlanApprovalPrompt {
+  id        String            @id @default(uuid())
+  runId     String
+  run       ThreadRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  plan      String
+  feedback  String?
+  status    String            @default("pending")
+  action    String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
   @@index([runId, status])
 }

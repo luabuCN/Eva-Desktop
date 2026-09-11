@@ -34,6 +34,8 @@ const seaDir = path.join(serverDir, "sea");
 const sidecarPath = path.join(serverDir, "sidecar", `open-harness-sidecar${extension}`);
 
 run("pnpm", ["--filter", "server", "build"]);
+// node-pty 是原生模块：bundle 保持 external，运行时动态加载；SEA 环境
+// 里加载失败时终端功能整体降级（见 runtime/terminal-hub.ts）。
 run("pnpm", [
   "--filter",
   "server",
@@ -43,6 +45,7 @@ run("pnpm", [
   "--bundle",
   "--platform=node",
   "--format=cjs",
+  "--external:node-pty",
   "--outfile=sea/server.cjs",
 ]);
 

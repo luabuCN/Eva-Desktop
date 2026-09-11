@@ -5,6 +5,7 @@ import { listTools, type ToolCatalogInfo } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { Item, ItemContent, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { CommandRulesSection } from "./CommandRulesSection";
 
 const RISK_LABEL = {
   low: "低风险",
@@ -64,6 +65,9 @@ export function ToolsSection() {
             ))}
           </div>
         )}
+        <div className="px-4 pb-4 pt-2">
+          <CommandRulesSection />
+        </div>
       </ScrollArea>
     </div>
   );

@@ -3,6 +3,7 @@ import { toAISdkStream } from "@mastra/ai-sdk";
 import type { ModelSelection } from "../providers/provider-service.js";
 import type { ReasoningEffort, ThinkingMode } from "./types.js";
 import { createModel } from "./model.js";
+import { projectDocsSection, type ProjectDocs } from "./project-docs.js";
 import type { SubAgentDefinitionInfo } from "./subagents.js";
 import { toolProviderRegistry, type RunContext } from "./tools/index.js";
 import type { DelegationBridge, DelegationRecord } from "./tools/index.js";
@@ -65,7 +66,11 @@ function boundedReport(value: string): string {
   return `${text.slice(0, Math.ceil(available / 2))}${marker}${text.slice(-Math.floor(available / 2))}`;
 }
 
-function composeDelegatePrompt(definition: SubAgentDefinitionInfo, workspacePath: string): string {
+function composeDelegatePrompt(
+  definition: SubAgentDefinitionInfo,
+  workspacePath: string,
+  projectDocs?: ProjectDocs,
+): string {
   const toolList = definition.tools.join(", ") || "none";
   const canMutate = definition.tools.some((name) => MUTATING_TOOL_NAMES.has(name));
   const framing = [
@@ -78,7 +83,9 @@ function composeDelegatePrompt(definition: SubAgentDefinitionInfo, workspacePath
     "Keep the report tight. Report findings, not narration.",
     `The workspace root is ${workspacePath}; resolve relative paths against it.`,
   ].join("\n");
-  return [framing, definition.prompt].join("\n\n");
+  return [framing, definition.prompt, projectDocs ? projectDocsSection(projectDocs) : undefined]
+    .filter((part): part is string => part !== undefined)
+    .join("\n\n");
 }
 
 export class DelegationHub implements DelegationBridge {
@@ -91,6 +98,7 @@ export class DelegationHub implements DelegationBridge {
     private readonly options: {
       definitions: SubAgentDefinitionInfo[];
       workspacePath: string;
+      projectDocs?: ProjectDocs;
       runContext: RunContext;
       mode: ThinkingMode;
       effort?: ReasoningEffort;
@@ -214,7 +222,11 @@ export class DelegationHub implements DelegationBridge {
         id: `delegate-${definition.name}-${record.delegationId}`,
         name: definition.name,
         description: definition.description,
-        instructions: composeDelegatePrompt(definition, this.options.workspacePath),
+        instructions: composeDelegatePrompt(
+          definition,
+          this.options.workspacePath,
+          this.options.projectDocs,
+        ),
         model,
         tools,
         maxRetries: 2,
