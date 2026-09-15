@@ -428,7 +428,7 @@ model WikiIngestJob {
   /// conversation | document
   sourceKind     String    @default("conversation")
   payload        String    @default("{}")
-  /// auto = 回合完成自动入队；manual = 会话内手动保存；rebuild = 从历史会话构建；upload = 手动上传文档
+  /// auto = 回合完成自动入队；manual = 会话内手动保存；rebuild = 从历史会话构建；upload = 手动上传文档；artifact = 对话产物文档自动沉淀
   trigger        String    @default("auto")
   status         String    @default("queued")
   error          String?

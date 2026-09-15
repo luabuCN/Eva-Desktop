@@ -22,6 +22,7 @@ import { getWorkspaceRoot } from "./workspace.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
+import { collectTurnChanges } from "./turn-changes.js";
 import { loadProjectDocs, projectDocsSection } from "./project-docs.js";
 import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
@@ -283,6 +284,9 @@ class AgentRuntimeService {
       const modelMessages = await convertToModelMessages(compactedMessages, {
         ignoreIncompleteToolCalls: true,
       });
+      // 回合时间窗起点：供回合末尾的产物兜底扫描（bash 生成的文件按
+      // mtime 落在窗内判定）与用量时长统计共用。
+      const turnStartedAt = Date.now();
       const mastraStream = await agent.stream(modelMessages, {
         abortSignal: activeRun.signal,
         maxSteps,
@@ -294,7 +298,6 @@ class AgentRuntimeService {
         sendStart: true,
         sendFinish: true,
       });
-      const turnStartedAt = Date.now();
 
       let released = false;
       let releaseOwnership!: () => void;
@@ -318,9 +321,16 @@ class AgentRuntimeService {
       const uiStream = createUIMessageStream<ChatUIMessage>({
         originalMessages: messages,
         execute: async ({ writer }) => {
+          // 看门狗的活性时间戳：任何证据表明运行仍在推进（模型分片、
+          // 委派/预览通知）都会刷新它。必须在下面的通知回调之前声明。
+          let lastChunkAt = Date.now();
+          const markAlive = () => {
+            lastChunkAt = Date.now();
+          };
           // 工具通过 run.notifyPreview 请求打开面板预览（生成 HTML、启动
           // 开发服务器等场景）；在进入流读取循环前注入 writer 引用。
           runContext.notifyPreview = (data) => {
+            markAlive();
             writer.write({
               type: "data-oh:preview.open",
               id: crypto.randomUUID(),
@@ -329,24 +339,75 @@ class AgentRuntimeService {
           };
           // 委派直播：子智能体的启动/每步工具/完成事件以 data-oh:subagent.*
           // 部件推入主流，前端折叠为 PI 式实时卡片。等待 DelegateWait 期间
-          // 界面因此仍有活动，而不是看起来阻塞。
+          // 界面因此仍有活动，而不是看起来阻塞。这些通知直写 writer、不
+          // 经过读循环，看门狗也要视为活性证据。
           delegationHub.notify = (notice: DelegationNotice) => {
+            markAlive();
             const type = `data-oh:subagent.${notice.kind}` as const;
             writer.write({ type, id: crypto.randomUUID(), data: notice });
           };
           const reader = sourceChunks.getReader();
+          // 空闲看门狗：提供方挂起（连接保持但长时间无分片，比如下一步的
+          // 模型请求在网络层静默停滞）不会让请求失败，maxRetries 无从触发，
+          // 回合会永远停在“运行中”。超过阈值即按停止按钮同款路径中止运行，
+          // 并向消息写入一条可见的中断说明。深度思考模型分片间隔通常远小
+          // 于该阈值，不会误伤。审批/征询/计划卡片等用户作答期间模型流
+          // 本来就没有分片（waiting.pending），重置计时而不是误判挂起。
+          let stalled = false;
+          const idleTimer = setInterval(() => {
+            if (activeRun.waiting.pending) {
+              markAlive();
+              return;
+            }
+            if (Date.now() - lastChunkAt < config.streamIdleTimeoutMs) return;
+            stalled = true;
+            runService.abort(run.id);
+            void reader.cancel().catch(() => undefined);
+          }, 5_000);
+          // 中止（用户停止或空闲超时）让 race 立即退出读循环；收尾统一
+          // 交给 onFinish(isAborted)。
+          const interrupted = new Promise<never>((_, reject) => {
+            activeRun.signal.addEventListener(
+              "abort",
+              () => reject(new Error("run aborted")),
+              { once: true },
+            );
+          });
           // Persisting every chunk used to await inside the read loop, which
           // throttled streaming and hammered SQLite on long runs. The chain
           // keeps event order (sequence assignment stays serialized) without
           // blocking the stream.
           let persistChain = Promise.resolve();
           while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            writer.write(value);
+            const pending = reader.read();
+            // 中止会让在途的底层 read 拒绝；预挂 catch 避免竞速落败一方的
+            // 拒绝变成未处理异常。
+            pending.catch(() => undefined);
+            let chunk: Awaited<typeof pending>;
+            try {
+              chunk = await Promise.race([pending, interrupted]);
+            } catch {
+              break;
+            }
+            if (chunk.done) break;
+            lastChunkAt = Date.now();
+            writer.write(chunk.value);
             persistChain = persistChain
-              .then(() => runService.appendTransition(run.id, value.type, value))
+              .then(() => runService.appendTransition(run.id, chunk.value.type, chunk.value))
               .catch(console.error);
+          }
+          clearInterval(idleTimer);
+          if (stalled) {
+            const noticeId = crypto.randomUUID();
+            writer.write({ type: "text-start", id: noticeId });
+            writer.write({
+              type: "text-delta",
+              id: noticeId,
+              delta:
+                "\n\n⚠️ 模型连接长时间没有输出，本回合已自动中断（已完成的部分保留在此）。" +
+                "请重新发送消息继续；若频繁出现可检查网络或更换模型。",
+            });
+            writer.write({ type: "text-end", id: noticeId });
           }
 
           // Turn-level token usage for the client's usage panel. Mastra's
@@ -389,6 +450,26 @@ class AgentRuntimeService {
             },
           };
           writer.write(usagePart);
+
+          // 回合修改/产物汇总卡：编辑工具有 FileChange 精确记录，bash 产物
+          // 按时间窗扫描工作区兜底，合并成一张"文件已更改"卡片（点击条目
+          // 可在右侧面板预览）。收集失败只丢卡片，不影响回合收尾。
+          try {
+            const changes = await collectTurnChanges({
+              runId: run.id,
+              workspacePath,
+              sinceMs: turnStartedAt - 1_000,
+            });
+            if (changes.files.length > 0) {
+              writer.write({
+                type: "data-oh:changes",
+                id: crypto.randomUUID(),
+                data: changes,
+              });
+            }
+          } catch (error) {
+            console.error("[turn-changes] collect failed", error);
+          }
         },
         onStepFinish: ({ messages: stepMessages }) =>
           runService.saveStep(

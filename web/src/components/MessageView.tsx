@@ -6,6 +6,9 @@ import {
   ChevronRightIcon,
   ClockIcon,
   CopyIcon,
+  FileMinusIcon,
+  FilePenIcon,
+  FilePlusIcon,
   FileTextIcon,
   FolderIcon,
   GitBranchIcon,
@@ -13,7 +16,7 @@ import {
   ListTodoIcon,
   LoaderCircleIcon,
   MinusIcon,
-  PaperclipIcon,
+  PackageIcon,
   PencilIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -24,7 +27,7 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import { memo, Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
@@ -38,9 +41,11 @@ import {
   MessageActions,
   MessageContent,
   MessageResponse,
+  FileLinkContext,
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import {
   extractWebFetchOutput,
   extractWebSearchOutput,
@@ -58,6 +63,7 @@ import {
   type CronContextInfo,
   type SubagentEventData,
   type ToolPart,
+  type TurnChangesData,
 } from "@/lib/chat-utils";
 import { describeTool, type ToolAction } from "@/lib/tool-display";
 
@@ -96,7 +102,9 @@ function MessageViewBase({
           {/* 静态（历史/已完成）文本用 mode="static"：跳过流式修补器
               remend——它会把已完成的链接误判为未闭合语法而改写。 */}
           <MessageResponse mode={isStreaming ? "streaming" : "static"}>
-            {normalizeWikiLinks(linkifyUrls(stripCronContext(part.text)))}
+            {normalizeWikiLinks(
+              linkifyUrls(linkifyFilePaths(stripCronContext(part.text))),
+            )}
           </MessageResponse>
         </MessageContent>
       );
@@ -117,6 +125,7 @@ function MessageViewBase({
           key={part.toolCallId}
           part={part}
           active={selectedToolId === part.toolCallId}
+          ended={!isStreaming}
           onToolSelect={onToolSelect}
         />
       );
@@ -289,6 +298,105 @@ function linkifyUrls(text: string): string {
     .join("");
 }
 
+/** 消息里可点击预览的文件扩展名：office/文档走 file-viewer，图片与
+ * HTML/PDF 由 /preview 静态路由以正确 MIME 输出，iframe 直接可显。 */
+const FILE_LINK_EXTENSIONS = new Set([
+  "html", "htm", "pdf", "md", "txt", "csv", "json",
+  "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "ico",
+  "pptx", "docx", "xlsx", "mp4", "webm", "mp3", "wav",
+]);
+
+function hasPreviewableExtension(candidate: string): boolean {
+  const dot = candidate.lastIndexOf(".");
+  if (dot < 0) return false;
+  return FILE_LINK_EXTENSIONS.has(candidate.slice(dot + 1).toLowerCase());
+}
+
+function fileLinkHref(path: string): string {
+  return `open-file:${encodeURIComponent(path)}`;
+}
+
+/** Windows 绝对路径里不会出现的空白与 markdown/URL 语法字符。 */
+const BARE_FILE_PATH_PATTERN =
+  /(^|[^[(\w])([A-Za-z]:[\\/][^\s`()[\]<>{}|*?'"]*)/g;
+
+/** 裸 Windows 绝对路径（盘符开头）转链接；前邻 [ 或 ( 视为已在链接语法里。 */
+function linkifyBareFilePaths(piece: string): string {
+  return piece.replace(
+    BARE_FILE_PATH_PATTERN,
+    (_match, prefix: string, rawPath: string) => {
+      const path = rawPath.replace(/[.,;:。；、*_]+$/, "");
+      const tail = rawPath.slice(path.length);
+      if (!hasPreviewableExtension(path)) return `${prefix}${rawPath}`;
+      return `${prefix}[${path}](${fileLinkHref(path)})${tail}`;
+    },
+  );
+}
+
+/** 模型常自己把产物路径写成 markdown 链接（href 是裸 Windows/POSIX 路径
+ * 或 file:/// 形式），这类 href 会被 Streamdown 的安全过滤拦截成
+ * [blocked]。渲染前统一重写为 open-file:——只处理形似路径且带可预览
+ * 扩展名的 href；已是 open-file: 的不动。 */
+function normalizeFileLinkHref(href: string): string | null {
+  // 知识库跳转链接（/wiki/...）有专属处理链路，不在此改写。
+  if (href.startsWith("/wiki/") || href.startsWith("wiki/")) return null;
+  let candidate = href;
+  if (candidate.startsWith("file:///")) {
+    try {
+      candidate = decodeURIComponent(candidate.slice("file:///".length));
+    } catch {
+      return null;
+    }
+  }
+  const isWindows = /^[A-Za-z]:[\\/]/.test(candidate);
+  const isPosix = candidate.startsWith("/") && !candidate.startsWith("//");
+  // 相对路径要求至少含一个分隔符，避免把普通单词/文件名链接误改
+  const isRelative =
+    !isWindows &&
+    !isPosix &&
+    /[\\/]/.test(candidate) &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate);
+  if (!isWindows && !isPosix && !isRelative) return null;
+  const cleaned = candidate.replace(/[.,;:。；、*_]+$/, "");
+  if (!hasPreviewableExtension(cleaned)) return null;
+  return cleaned;
+}
+
+function rewriteFileLinkHrefs(piece: string): string {
+  return piece.replace(/\]\(([^)\s]+)\)/g, (match, href: string) => {
+    if (href.startsWith("open-file:")) return match;
+    const filePath = normalizeFileLinkHref(href);
+    return filePath ? `](${fileLinkHref(filePath)})` : match;
+  });
+}
+
+/** 行内代码整段就是一个文件路径时（模型常以 `output/a.pptx` 形式汇报
+ * 相对路径），整体替换为链接；代码片段里夹杂的路径片段不动。 */
+function linkifyInlineCodePath(piece: string): string {
+  const inner = piece.slice(1, -1).trim();
+  if (!inner.includes("/") && !inner.includes("\\")) return piece;
+  if (!hasPreviewableExtension(inner)) return piece;
+  return `[${inner}](${fileLinkHref(inner)})`;
+}
+
+/** 把消息里可预览的文件路径转成 open-file: 链接，点击后右侧面板打开
+ * 预览。与 linkifyUrls 同一道防线：跳过代码围栏与行内代码（重写 href
+ * 只作用于围栏外的普通文本段）。 */
+function linkifyFilePaths(text: string): string {
+  const transformSegment = (segment: string) =>
+    segment
+      .split(/(`[^`\n]*`)/g)
+      .map((piece, pieceIndex) => {
+        if (pieceIndex % 2 === 1) return linkifyInlineCodePath(piece);
+        return linkifyBareFilePaths(rewriteFileLinkHrefs(piece));
+      })
+      .join("");
+  return text
+    .split(/(```[\s\S]*?(?:```|$))/g)
+    .map((segment, index) => (index % 2 === 1 ? segment : transformSegment(segment)))
+    .join("");
+}
+
 type AssistantBlock =
   | { kind: "activity"; items: ActivityItem[] }
   | { kind: "part"; part: RenderablePart };
@@ -382,12 +490,32 @@ const ACTION_ICONS: Record<ToolAction, typeof WrenchIcon> = {
 
 const RUNNING_STATES = new Set<ToolPart["state"]>(["input-streaming", "input-available"]);
 
-function StatusPill({ state }: { state: ToolPart["state"] }) {
+/** 悬挂的运行态：回合已结束（消息不再流式）但部件没有收到输出分片——
+ * 中止/崩溃留下的 input-available 之类，显示为「已中断」而不是永远转圈。 */
+function isDanglingRunning(state: ToolPart["state"]) {
+  return RUNNING_STATES.has(state) || state === "approval-requested";
+}
+
+function StatusPill({
+  state,
+  interrupted = false,
+}: {
+  state: ToolPart["state"];
+  interrupted?: boolean;
+}) {
   if (state === "output-available") {
     return (
       <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
         <CheckIcon className="size-3 text-green-600" />
         已完成
+      </span>
+    );
+  }
+  if (interrupted && isDanglingRunning(state)) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <MinusIcon className="size-3" />
+        已中断
       </span>
     );
   }
@@ -550,16 +678,20 @@ const ToolLine = memo(
   function ToolLine({
     part,
     active,
+    ended = false,
     onToolSelect,
   }: {
     part: ToolPart;
     active: boolean;
+    /** 回合已结束（消息不再流式）：悬挂的运行态部件按「已中断」呈现。 */
+    ended?: boolean;
     onToolSelect?: (id: string) => void;
   }) {
     const title = part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
     const display = describeTool(part);
     const ActionIcon = ACTION_ICONS[display.action];
-    const running = RUNNING_STATES.has(part.state) || part.state === "approval-requested";
+    const interrupted = ended && isDanglingRunning(part.state);
+    const running = !interrupted && (RUNNING_STATES.has(part.state) || part.state === "approval-requested");
     const failed = part.state === "output-error";
     const [open, setOpen] = useState(failed);
 
@@ -598,7 +730,7 @@ const ToolLine = memo(
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <StatusPill state={part.state} />
+          <StatusPill state={part.state} interrupted={interrupted} />
           <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/tool:rotate-90" />
         </CollapsibleTrigger>
         <CollapsibleContent className="outline-none">
@@ -639,6 +771,7 @@ const ToolLine = memo(
   (prev, next) =>
     prev.part === next.part &&
     prev.active === next.active &&
+    prev.ended === next.ended &&
     prev.onToolSelect === next.onToolSelect,
 );
 
@@ -719,6 +852,7 @@ const ActivityGroup = memo(function ActivityGroup({
               key={item.part.toolCallId}
               part={item.part}
               active={selectedToolId === item.part.toolCallId}
+              ended={!isActive}
               onToolSelect={onToolSelect}
             />
           ) : (
@@ -772,13 +906,81 @@ function FilePartView({ part }: { part: FileUIPart }) {
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs text-muted-foreground">
-      <PaperclipIcon className="size-3" />
+      <FileTypeIcon name={part.filename ?? ""} className="size-3.5" />
       {part.filename ?? part.mediaType}
     </span>
   );
 }
 
 type DataPart = ChatUIMessage["parts"][number];
+
+const CHANGE_KIND_META: Record<
+  TurnChangesData["files"][number]["changeKind"],
+  { label: string; icon: typeof FilePlusIcon }
+> = {
+  create: { label: "新建", icon: FilePlusIcon },
+  edit: { label: "修改", icon: FilePenIcon },
+  delete: { label: "删除", icon: FileMinusIcon },
+  artifact: { label: "产物", icon: PackageIcon },
+};
+
+/** 回合末尾的修改/产物汇总卡（ZCode 式）：标题行“N 个文件已更改
+ * +x −y”，展开列出每个文件，点击条目在右侧面板预览。 */
+function TurnChangesCard({ data }: { data: TurnChangesData }) {
+  const openFile = useContext(FileLinkContext);
+  const files = data.files ?? [];
+  const [open, setOpen] = useState(false);
+  if (files.length === 0) return null;
+
+  const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
+  const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/changes w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <FileTextIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">
+          {files.length} 个文件已{files.every((f) => f.changeKind === "artifact") ? "生成" : "更改"}
+        </span>
+        {additions > 0 ? <span className="shrink-0 text-green-600">+{additions}</span> : null}
+        {deletions > 0 ? <span className="shrink-0 text-red-600">−{deletions}</span> : null}
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/changes:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="outline-none">
+        <div className="ml-3 space-y-0.5 border-l py-1 pl-3">
+          {files.map((file) => {
+            const meta = CHANGE_KIND_META[file.changeKind] ?? CHANGE_KIND_META.edit;
+            return (
+              <button
+                key={file.absolutePath}
+                type="button"
+                title={`点击预览 ${file.absolutePath}`}
+                onClick={() => openFile?.(`open-file:${encodeURIComponent(file.absolutePath)}`)}
+                className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/50"
+              >
+                <FileTypeIcon
+                  name={file.path.split(/[\\/]/).pop() ?? file.path}
+                  className="size-4 shrink-0"
+                  aria-hidden
+                />
+                <span className="shrink-0 text-muted-foreground">{meta.label}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground/90">
+                  {file.path}
+                </span>
+                {file.additions > 0 ? (
+                  <span className="shrink-0 text-green-600">+{file.additions}</span>
+                ) : null}
+                {file.deletions > 0 ? (
+                  <span className="shrink-0 text-red-600">−{file.deletions}</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 function DataPartView({ part }: { part: DataPart }): ReactNode {
   switch (part.type) {
@@ -802,6 +1004,8 @@ function DataPartView({ part }: { part: DataPart }): ReactNode {
           {part.data.label ? `（${part.data.label}）` : ""}，已在浏览器面板中打开
         </SystemNote>
       );
+    case "data-oh:changes":
+      return <TurnChangesCard data={part.data} />;
     default:
       return null;
   }

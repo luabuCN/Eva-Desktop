@@ -11,7 +11,7 @@ interface DocumentFilePreviewProps {
 }
 
 /** 跟随应用深浅色（<html class="dark">），切换时重挂预览器应用主题。 */
-function useAppTheme(): "light" | "dark" {
+export function useAppTheme(): "light" | "dark" {
   const [dark, setDark] = useState(() =>
     document.documentElement.classList.contains("dark"),
   );

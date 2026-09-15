@@ -335,6 +335,12 @@ export const WikiLinkContext = createContext<((href: string) => void) | undefine
   undefined,
 );
 
+/** 工作区文件预览链接（open-file:<encoded path>）的打开方式，同样由外层
+ * （ChatPane）注入；未提供时退回默认 <a> 行为。 */
+export const FileLinkContext = createContext<((href: string) => void) | undefined>(
+  undefined,
+);
+
 const StreamdownLink = ({
   href,
   children,
@@ -342,6 +348,7 @@ const StreamdownLink = ({
 }: ComponentProps<"a">) => {
   const openLink = useContext(MessageLinkContext);
   const openWiki = useContext(WikiLinkContext);
+  const openFile = useContext(FileLinkContext);
   // 知识库引用链接：模型按工具返回的 link（/wiki/<scope>/<path>）以 markdown
   // 形式引用，点击跳转知识库对应页面。
   const isWikiHref = (value: string) =>
@@ -355,6 +362,23 @@ const StreamdownLink = ({
         onClick={(event) => {
           event.preventDefault();
           openWiki(href);
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+  // 工作区文件链接：由 linkifyFilePaths 生成的 open-file:<encoded>，点击
+  // 后右侧面板打开预览（office 走 file-viewer，其余走 /preview 静态路由）。
+  if (href && href.startsWith("open-file:") && openFile) {
+    return (
+      <button
+        type="button"
+        data-streamdown="link"
+        className="wrap-anywhere cursor-pointer appearance-none text-left font-medium text-primary underline decoration-primary/40 underline-offset-2"
+        onClick={(event) => {
+          event.preventDefault();
+          openFile(href);
         }}
       >
         {children}
@@ -387,7 +411,8 @@ const streamdownComponents = { a: StreamdownLink };
 
 /** 知识库跳转链接放行（/wiki/ 路径及旧格式），其余协议走默认安全变换。 */
 const streamdownUrlTransform: UrlTransform = (url, key, node) =>
-  url.startsWith("/wiki/") || url.startsWith("wiki/") || url.startsWith("wiki://")
+  url.startsWith("/wiki/") || url.startsWith("wiki/") || url.startsWith("wiki://") ||
+  url.startsWith("open-file:")
     ? url
     : defaultUrlTransform(url, key, node);
 

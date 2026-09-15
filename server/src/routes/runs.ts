@@ -6,15 +6,32 @@ import { deriveAllowRule } from "../runtime/tools/command-rules.js";
 
 export const runRoutes = new Hono();
 
+/** AskUserPrompt.questions 在库里是 JSON 字符串，出站时解析成数组，与前端
+ * AskUserInfo 类型对齐；历史脏数据解析失败时退回空数组（前端会忽略该卡）。 */
+function serializeAsk<T extends { questions: string }>(ask: T) {
+  let questions: unknown = ask.questions;
+  try {
+    questions = JSON.parse(ask.questions);
+  } catch {
+    questions = [];
+  }
+  return { ...ask, questions };
+}
+
 runRoutes.get("/conversations/:id", async (c) => {
   const runs = await runService.listForConversation(c.req.param("id"));
-  return c.json({ runs });
+  return c.json({
+    runs: runs.map((run) => ({
+      ...run,
+      asks: run.asks?.map(serializeAsk),
+    })),
+  });
 });
 
 runRoutes.get("/:id", async (c) => {
   const run = await runService.find(c.req.param("id"));
   if (!run) return c.json({ error: "Run not found" }, 404);
-  return c.json({ run });
+  return c.json({ run: { ...run, asks: run.asks?.map(serializeAsk) } });
 });
 
 const decisionSchema = z.object({

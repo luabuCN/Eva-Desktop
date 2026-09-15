@@ -105,6 +105,22 @@ export async function readFileContent(path: string): Promise<FileContent> {
   return apiFetch<FileContent>(`/api/files/content?path=${encodeURIComponent(path)}`);
 }
 
+/** 把消息里的文件路径（可能是工作区相对路径）解析为服务端认可的绝对路径。 */
+export async function resolveFilePath(path: string): Promise<string> {
+  const data = await apiFetch<{ path: string }>(
+    `/api/files/resolve?path=${encodeURIComponent(path)}`,
+  );
+  return data.path;
+}
+
+/** 工作区/项目内文件的静态预览地址（服务端 /preview 路由按原始字节吐出，
+ * 各段独立编码以保证 HTML 相对资源沿同一前缀解析）。 */
+export function filePreviewUrl(absolutePath: string): string {
+  const normalized = absolutePath.replaceAll("\\", "/");
+  const encoded = normalized.split("/").map(encodeURIComponent).join("/");
+  return `${API_URL}/preview/${encoded}`;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -1048,7 +1064,7 @@ export interface WikiJobsInfo {
     sourceKind?: "conversation" | "document";
     filename?: string | null;
     status: "queued" | "processing" | "completed" | "failed";
-    trigger: "auto" | "manual" | "rebuild" | "upload";
+    trigger: "auto" | "manual" | "rebuild" | "upload" | "artifact";
     error?: string | null;
     createdAt: string;
     completedAt?: string | null;

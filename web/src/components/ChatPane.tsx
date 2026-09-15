@@ -51,7 +51,7 @@ import type {
 } from "@/api";
 import { ingestConversationToWiki, listSkills } from "@/api";
 import { MessageView } from "./MessageView";
-import { MessageLinkContext, WikiLinkContext } from "./ai-elements/message";
+import { FileLinkContext, MessageLinkContext, WikiLinkContext } from "./ai-elements/message";
 import { ConversationMinimap } from "./ConversationMinimap";
 import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
@@ -163,6 +163,8 @@ export interface ChatPaneProps {
   turnNote?: TurnOutcomeNote;
   /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
   onOpenLink?: (url: string) => void;
+  /** 聊天内容里的 open-file: 文件链接点击后在右侧面板打开预览。 */
+  onOpenFile?: (filePath: string) => void;
   /** 聊天内容里的 wiki:// 知识库引用链接点击后跳转知识库对应页面。 */
   onOpenWikiPage: (scopeId: string, path: string) => void;
   /** 停止按钮：运行与连接解耦后需要走服务端中止 API；缺省退回本地断流。 */
@@ -194,6 +196,7 @@ export function ChatPane({
   onAskAnswer,
   turnNote,
   onOpenLink,
+  onOpenFile,
   onOpenWikiPage,
   onStop,
 }: ChatPaneProps) {
@@ -262,6 +265,19 @@ export function ChatPane({
       if (target) onOpenWikiPage(target.scopeId, target.path);
     },
     [onOpenWikiPage],
+  );
+
+  // open-file:<encoded> 文件链接：解码出路径后交右侧面板预览。
+  const handleFileLink = useCallback(
+    (href: string) => {
+      const encoded = href.slice("open-file:".length);
+      try {
+        onOpenFile?.(decodeURIComponent(encoded));
+      } catch {
+        // 编码异常的 href 直接忽略，避免把乱码路径送进预览
+      }
+    },
+    [onOpenFile],
   );
 
   // —— 输入框「/技能」斜杠菜单 ——
@@ -390,6 +406,7 @@ export function ChatPane({
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       <MessageLinkContext.Provider value={onOpenLink}>
       <WikiLinkContext.Provider value={handleWikiLink}>
+      <FileLinkContext.Provider value={handleFileLink}>
         <Conversation onClickCapture={handleLinkClickCapture}>
           <ConversationContent className="mx-auto min-h-full w-full max-w-5xl gap-6 py-6">
             {chat.messages.length === 0 ? (
@@ -422,6 +439,7 @@ export function ChatPane({
           <ConversationMinimap messages={chat.messages} />
           <ConversationScrollButton />
         </Conversation>
+      </FileLinkContext.Provider>
       </WikiLinkContext.Provider>
       </MessageLinkContext.Provider>
 

@@ -71,6 +71,22 @@ fileRoutes.get("/", async (c) => {
   }
 });
 
+fileRoutes.get("/resolve", async (c) => {
+  const requested = c.req.query("path") ?? "";
+  if (!requested) return c.json({ error: "path query parameter is required" }, 400);
+  try {
+    const resolved = await resolveBrowsablePath(requested);
+    const stat = await fs.stat(resolved).catch(() => null);
+    if (!stat?.isFile()) return c.json({ error: "Not a file" }, 400);
+    return c.json({ path: resolved });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Cannot resolve file" },
+      400,
+    );
+  }
+});
+
 fileRoutes.get("/content", async (c) => {
   const requested = c.req.query("path") ?? "";
   if (!requested) return c.json({ error: "path query parameter is required" }, 400);

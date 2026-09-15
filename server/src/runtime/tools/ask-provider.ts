@@ -12,8 +12,12 @@ const MAX_OPTIONS = 6;
 const TOOL_DESCRIPTION =
   "Ask the user one or more multiple-choice questions and return the selected answers. " +
   "Each question carries its own options; the desktop card always adds a free-text choice, " +
-  "so do not include one yourself. Use it when a decision genuinely belongs to the user " +
-  "(ambiguous requirements, keep/discard choices, trade-offs); pick sensible defaults yourself otherwise.";
+  "so do not include one yourself. Before generating a document deliverable (PPT, Word, " +
+  "Excel, PDF, poster, chart), call this once to confirm the key open parameters " +
+  "(audience, length, language, style) — batch every question into a single call, keep " +
+  "options concrete, and put your recommended option first. Also use it when a decision " +
+  "genuinely belongs to the user (ambiguous requirements, keep/discard choices, " +
+  "trade-offs); pick sensible defaults yourself for trivial choices.";
 
 /** Interactive askUser tool: pauses the run on a pending AskUserPrompt row until
  * the client resolves it (see routes/runs.ts), then returns the answers. */

@@ -141,7 +141,10 @@ function createBashTool(rootPath: string, run: RunContext): RuntimeTool {
   return createTool({
     id: "bash",
     description:
-      "Execute a shell command in the project workspace. Read-only commands (git status/diff/log, ls, grep, ...) and allowlisted command rules run without asking; everything else waits for explicit user approval. Uses PowerShell on Windows and Bash elsewhere. Dev-server style commands (pnpm dev, npm start, vite, python -m http.server, ...) are started in the background instead of blocking, and their URL is reported back.",
+      "Execute a shell command in the project workspace. Any file the command produces " +
+      "(documents, images, archives, builds) must be written inside the workspace root, " +
+      "never to the Desktop, home directory, or other outside locations. " +
+      "Read-only commands (git status/diff/log, ls, grep, ...) and allowlisted command rules run without asking; everything else waits for explicit user approval. Uses PowerShell on Windows and Bash elsewhere. Dev-server style commands (pnpm dev, npm start, vite, python -m http.server, ...) are started in the background instead of blocking, and their URL is reported back.",
     inputSchema: z.object({
       command: z.string().min(1),
       timeout: z.number().int().min(1_000).max(300_000).optional().default(30_000),

@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import {
   Select,
   SelectContent,
@@ -464,7 +465,7 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
           )}
           style={{ paddingLeft: depth * 12 + 22 }}
         >
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+          <FileTypeIcon name={node.name} className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{node.name}</span>
         </button>
       );
@@ -817,7 +818,12 @@ export function WikiPageView({ onExit, target }: WikiPageViewProps) {
                                   "bg-accent font-medium",
                               )}
                             >
-                              <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                              {/* 原始资料按文件类型显示图标；页面分组仍用类型图标。 */}
+                              {group.type === "raw" ? (
+                                <FileTypeIcon name={entry.title} className="size-4 shrink-0" />
+                              ) : (
+                                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                              )}
                               <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                             </button>
                           ))}

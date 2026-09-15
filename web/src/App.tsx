@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai";
 import {
   apiFetch,
   API_URL,
+  filePreviewUrl,
   isReasoningEffort,
   listConversationRuns,
   listConversationTasks,
@@ -18,6 +19,7 @@ import {
   deleteProject as apiDeleteProject,
   deleteSession as apiDeleteSession,
   isPermissionMode,
+  resolveFilePath,
   updateProject,
   updateSession,
   type ApprovalAction,
@@ -536,6 +538,29 @@ function SessionView({
     [panelOpen, onPanelOpenChange],
   );
 
+  // 聊天里的文件链接（open-file:）：解析成绝对路径后送进浏览器面板；
+  // office 扩展名由面板改用 file-viewer 渲染，其余类型 iframe 直接显示。
+  const handleOpenFile = useCallback(
+    (filePath: string) => {
+      const isAbsolute =
+        /^[A-Za-z]:[\\/]/.test(filePath) || filePath.startsWith("/") || filePath.startsWith("\\\\");
+      void (isAbsolute
+        ? Promise.resolve(filePath)
+        : resolveFilePath(filePath).catch(() => filePath)
+      ).then((absolute) => {
+        setPreviewTarget({
+          url: filePreviewUrl(absolute),
+          kind: "file",
+          label: absolute.split(/[\\/]/).at(-1) ?? absolute,
+          nonce: Date.now(),
+        });
+        setTab("browser");
+        if (!panelOpen) onPanelOpenChange(true);
+      });
+    },
+    [panelOpen, onPanelOpenChange],
+  );
+
   const handleTogglePanel = useCallback(() => {
     onPanelOpenChange(!panelOpen);
   }, [onPanelOpenChange, panelOpen]);
@@ -643,6 +668,7 @@ function SessionView({
           }
           turnNote={turnNote}
           onOpenLink={handleOpenLink}
+          onOpenFile={handleOpenFile}
           onOpenWikiPage={onOpenWikiPage}
           onStop={handleStop}
         />
@@ -671,6 +697,7 @@ function SessionView({
             contextWindow={contextWindow}
             previewTarget={previewTarget}
             onOpenLink={handleOpenLink}
+            onOpenFile={handleOpenFile}
           />
         ) : null}
       </div>

@@ -9,6 +9,7 @@ import {
   RefreshCwIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { OfficeFilePreview } from "@/components/OfficeFilePreview";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,33 @@ export interface PreviewTarget {
   kind?: "file" | "server";
   label?: string;
   nonce: number;
+}
+
+/** office 扩展名的 /preview 地址改用 file-viewer 渲染（iframe 显示不了
+ * pptx/docx/xlsx，只能触发下载）。 */
+const OFFICE_PREVIEW_EXTENSIONS = new Set(["pptx", "docx", "xlsx"]);
+
+function officePreviewFilename(url: string): string | null {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  if (!pathname.startsWith("/preview/")) return null;
+  const lastSegment = pathname.split("/").at(-1) ?? "";
+  if (!lastSegment) return null;
+  let filename: string;
+  try {
+    filename = decodeURIComponent(lastSegment);
+  } catch {
+    return null;
+  }
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0) return null;
+  return OFFICE_PREVIEW_EXTENSIONS.has(filename.slice(dot + 1).toLowerCase())
+    ? filename
+    : null;
 }
 
 /** 地址栏输入归一化：裸主机默认补 http://，只允许 http/https。 */
@@ -134,6 +162,9 @@ export function BrowserPane({ target }: { target: PreviewTarget | null }) {
     return () => clearTimeout(timer);
   }, [loading, reloadKey, currentUrl]);
 
+  // office 文件的预览地址改走 file-viewer（见 officePreviewFilename）。
+  const officeFilename = currentUrl ? officePreviewFilename(currentUrl) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
@@ -204,19 +235,32 @@ export function BrowserPane({ target }: { target: PreviewTarget | null }) {
 
       {currentUrl ? (
         <div className="relative min-h-0 flex-1">
-          {loading ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
-              <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
+          {officeFilename ? (
+            // office 文件：iframe 只会触发下载，改用 file-viewer 预览（与
+            // 知识库“原文件预览”同一渲染链路）。absolute inset-0 给预览器
+            // 一个尺寸确定的宿主（file-viewer 要求明确高度），key 跟随
+            // reloadKey，点刷新时重新拉取字节。
+            <div className="absolute inset-0">
+              <OfficeFilePreview key={reloadKey} url={currentUrl} filename={officeFilename} />
             </div>
-          ) : null}
-          <iframe
-            key={reloadKey}
-            src={currentUrl}
-            title="页面预览"
-            className="h-full w-full border-0 bg-white"
-            onLoad={() => setLoading(false)}
-          />
-          {kind ? (
+          ) : (
+            <>
+              {loading ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
+                  <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : null}
+              <iframe
+                key={reloadKey}
+                src={currentUrl}
+                title="页面预览"
+                className="h-full w-full border-0 bg-white"
+                onLoad={() => setLoading(false)}
+              />
+            </>
+          )}
+          {/* office 预览不再显示“文件预览”角标，保持预览区干净 */}
+          {kind && !officeFilename ? (
             <div className="pointer-events-none absolute right-2 bottom-2 rounded-md bg-background/85 px-2 py-1 text-[10px] text-muted-foreground shadow-sm">
               {kind === "server" ? "开发服务器" : "文件预览"}
             </div>

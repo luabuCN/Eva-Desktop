@@ -18,6 +18,7 @@ import {
   summarizeConversationToWiki,
   summarizeDocumentToWiki,
 } from "./wiki-llm.js";
+import { ingestConversationArtifacts } from "./wiki-artifacts.js";
 
 const AUTO_INGEST_KEY = "wiki.autoIngest";
 const DEFAULT_SCOPE_KEY = "wiki.defaultScope";
@@ -213,8 +214,9 @@ class WikiIngestQueue {
     void this.pump();
   }
 
-  /** 手动上传文档入队：原文档已先经 saveRawDocument 落库（documentId 关联），
-   * payload 携带提取文本，串行总结为 wiki 页面。 */
+  /** 文档入队：原文档已先经 saveRawDocument 落库（documentId 关联），
+   * payload 携带提取文本，串行总结为 wiki 页面。手动上传 trigger=upload，
+   * 对话产物自动沉淀 trigger=artifact。 */
   async enqueueDocument(input: {
     scopeId: string;
     projectId?: string | null;
@@ -222,6 +224,7 @@ class WikiIngestQueue {
     filename: string;
     title: string;
     text: string;
+    trigger?: "upload" | "artifact";
   }): Promise<void> {
     await prisma.wikiIngestJob.create({
       data: {
@@ -235,7 +238,7 @@ class WikiIngestQueue {
           title: input.title,
           text: input.text,
         }),
-        trigger: "upload",
+        trigger: input.trigger ?? "upload",
       },
     });
     void this.pump();
@@ -340,6 +343,40 @@ class WikiIngestQueue {
     }
   }
 
+  /** 产物文档沉淀：窗口内生成的 PPT/表格/文档（data-oh:changes 记录）与
+   * 手动上传走同一套解析管线——保存原件、建「来源/原始资料」入口页，再
+   * 排队 LLM 总结。整体失败只丢产物，不影响对话总结本身。 */
+  private async ingestArtifactsForJob(job: {
+    scopeId: string;
+    projectId: string | null;
+    conversationId: string;
+    fromSeq: number;
+    toSeq: number;
+  }): Promise<void> {
+    try {
+      const artifacts = await ingestConversationArtifacts({
+        scopeId: job.scopeId,
+        projectId: job.projectId,
+        conversationId: job.conversationId,
+        fromSeq: job.fromSeq,
+        toSeq: job.toSeq,
+      });
+      for (const artifact of artifacts) {
+        await this.enqueueDocument({
+          scopeId: job.scopeId,
+          projectId: job.projectId,
+          documentId: artifact.documentId,
+          filename: artifact.filename,
+          title: artifact.title,
+          text: artifact.text,
+          trigger: "artifact",
+        });
+      }
+    } catch (error) {
+      console.error("[wiki] conversation artifact ingest failed", error);
+    }
+  }
+
   private async runJob(jobId: string): Promise<void> {
     const claimed = await prisma.wikiIngestJob.updateMany({
       where: { id: jobId, status: "queued" },
@@ -429,6 +466,8 @@ class WikiIngestQueue {
           where: { id: jobId },
           data: { status: "completed", completedAt: new Date(), error: null },
         });
+        // 对话没有可总结的文字时产物仍要沉淀（比如只跑了脚本出文件）。
+        await this.ingestArtifactsForJob(job);
         return;
       }
 
@@ -448,6 +487,8 @@ class WikiIngestQueue {
         },
         result,
       });
+      await this.ingestArtifactsForJob(job);
+
       await prisma.wikiIngestJob.update({
         where: { id: jobId },
         data: { status: "completed", completedAt: new Date(), error: null },

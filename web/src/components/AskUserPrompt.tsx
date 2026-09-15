@@ -36,7 +36,9 @@ export interface AskUserPromptProps {
 
 /** askUser 工具的交互卡片：一次只展示一题，选项点选、可跳过、可放弃整组。 */
 export function AskUserPrompt({ ask, onSubmit }: AskUserPromptProps) {
-  const questions = ask.questions;
+  // 防御：questions 缺失或不是数组（如旧负载/脏数据）时不渲染卡片，
+  // 避免下面的取值把整页打崩。
+  const questions = Array.isArray(ask.questions) ? ask.questions : [];
   const [index, setIndex] = useState(0);
   const [drafts, setDrafts] = useState<DraftAnswer[]>(() => emptyDrafts(questions.length));
   const [submitting, setSubmitting] = useState(false);
@@ -46,9 +48,6 @@ export function AskUserPrompt({ ask, onSubmit }: AskUserPromptProps) {
     setDrafts(emptyDrafts(questions.length));
     setSubmitting(false);
   }, [ask.id, questions.length]);
-
-  const current = questions[index];
-  const currentDraft = drafts[index];
 
   const statuses = useMemo(
     () =>
@@ -61,6 +60,16 @@ export function AskUserPrompt({ ask, onSubmit }: AskUserPromptProps) {
       ),
     [drafts],
   );
+
+  if (questions.length === 0) return null;
+
+  const current = questions[index] ?? questions[questions.length - 1];
+  const currentDraft = drafts[index] ?? {
+    values: [],
+    customSelected: false,
+    customText: "",
+    skipped: false,
+  };
 
   const updateDraft = (update: (draft: DraftAnswer) => DraftAnswer) => {
     setDrafts((previous) =>

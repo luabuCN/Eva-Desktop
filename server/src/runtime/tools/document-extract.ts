@@ -23,6 +23,13 @@ export function isDocumentPath(filePath: string): boolean {
   return DOCUMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
+/** 知识库入库可解析的全部文档扩展（二进制文档 + 纯文本/标记格式）。
+ * 产物沉淀（对话生成的 ppt/表格/文档自动入库）用它筛候选文件。 */
+export function isIngestibleDocumentPath(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return DOCUMENT_EXTENSIONS.has(extension) || TEXT_DOCUMENT_EXTENSIONS.has(extension);
+}
+
 export interface ExtractedDocument {
   /** 提取出的纯文本（已按软上限截断）。 */
   text: string;

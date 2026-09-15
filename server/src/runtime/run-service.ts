@@ -55,6 +55,7 @@ class InteractiveApprovalBridge {
     private readonly runId: string,
     private readonly signal?: AbortSignal,
     private readonly projectId?: string,
+    private readonly waiting?: InteractiveWaitGate,
   ) {}
 
   allowAlways(toolName: string) {
@@ -88,19 +89,24 @@ class InteractiveApprovalBridge {
     });
     await runService.updateStatus(this.runId, "waiting_approval");
 
-    const deadline = Date.now() + InteractiveApprovalBridge.TIMEOUT_MS;
-    while (Date.now() < deadline && !this.signal?.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const decision = await prisma.toolApproval.findUnique({ where: { id: approval.id } });
-      if (!decision) break;
-      if (decision.status === "approved") {
-        await runService.updateStatus(this.runId, "running");
-        return { kind: "approved", approvalId: decision.id };
+    this.waiting?.enter();
+    try {
+      const deadline = Date.now() + InteractiveApprovalBridge.TIMEOUT_MS;
+      while (Date.now() < deadline && !this.signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const decision = await prisma.toolApproval.findUnique({ where: { id: approval.id } });
+        if (!decision) break;
+        if (decision.status === "approved") {
+          await runService.updateStatus(this.runId, "running");
+          return { kind: "approved", approvalId: decision.id };
+        }
+        if (decision.status === "rejected") {
+          await runService.updateStatus(this.runId, "running");
+          return { kind: "rejected", reason: decision.decisionBy ? `by ${decision.decisionBy}` : undefined };
+        }
       }
-      if (decision.status === "rejected") {
-        await runService.updateStatus(this.runId, "running");
-        return { kind: "rejected", reason: decision.decisionBy ? `by ${decision.decisionBy}` : undefined };
-      }
+    } finally {
+      this.waiting?.exit();
     }
 
     if (this.signal?.aborted) {
@@ -129,6 +135,7 @@ class InteractiveAskBridge implements AskUserBridge {
   constructor(
     private readonly runId: string,
     private readonly signal?: AbortSignal,
+    private readonly waiting?: InteractiveWaitGate,
   ) {}
 
   async ask(questions: AskUserQuestion[]): Promise<Array<string[] | null>> {
@@ -138,26 +145,31 @@ class InteractiveAskBridge implements AskUserBridge {
     });
     await runService.updateStatus(this.runId, "waiting_approval");
 
-    while (!this.signal?.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const row = await prisma.askUserPrompt.findUnique({ where: { id: prompt.id } });
-      if (!row) break;
-      if (row.status === "answered" && row.answers) {
-        await runService.updateStatus(this.runId, "running");
-        try {
-          const parsed: unknown = JSON.parse(row.answers);
-          if (Array.isArray(parsed) && parsed.length === questions.length) {
-            return parsed as Array<string[] | null>;
+    this.waiting?.enter();
+    try {
+      while (!this.signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const row = await prisma.askUserPrompt.findUnique({ where: { id: prompt.id } });
+        if (!row) break;
+        if (row.status === "answered" && row.answers) {
+          await runService.updateStatus(this.runId, "running");
+          try {
+            const parsed: unknown = JSON.parse(row.answers);
+            if (Array.isArray(parsed) && parsed.length === questions.length) {
+              return parsed as Array<string[] | null>;
+            }
+          } catch {
+            // Malformed answers fall through to the skipped result below.
           }
-        } catch {
-          // Malformed answers fall through to the skipped result below.
+          break;
         }
-        break;
+        if (row.status === "cancelled") {
+          await runService.updateStatus(this.runId, "running");
+          return skipped;
+        }
       }
-      if (row.status === "cancelled") {
-        await runService.updateStatus(this.runId, "running");
-        return skipped;
-      }
+    } finally {
+      this.waiting?.exit();
     }
 
     await prisma.askUserPrompt.update({
@@ -181,6 +193,7 @@ class InteractivePlanBridge implements PlanApprovalBridge {
   constructor(
     private readonly runId: string,
     private readonly signal?: AbortSignal,
+    private readonly waiting?: InteractiveWaitGate,
   ) {}
 
   async request(plan: string): Promise<PlanDecision | null> {
@@ -189,18 +202,23 @@ class InteractivePlanBridge implements PlanApprovalBridge {
     });
     await runService.updateStatus(this.runId, "waiting_approval");
 
-    while (!this.signal?.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const row = await prisma.planApprovalPrompt.findUnique({ where: { id: prompt.id } });
-      if (!row) break;
-      if (row.status === "approved" && (row.action === "approve" || row.action === "approve_full")) {
-        await runService.updateStatus(this.runId, "running");
-        return { action: row.action };
+    this.waiting?.enter();
+    try {
+      while (!this.signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const row = await prisma.planApprovalPrompt.findUnique({ where: { id: prompt.id } });
+        if (!row) break;
+        if (row.status === "approved" && (row.action === "approve" || row.action === "approve_full")) {
+          await runService.updateStatus(this.runId, "running");
+          return { action: row.action };
+        }
+        if (row.status === "rejected") {
+          await runService.updateStatus(this.runId, "running");
+          return { action: "reject", feedback: row.feedback ?? undefined };
+        }
       }
-      if (row.status === "rejected") {
-        await runService.updateStatus(this.runId, "running");
-        return { action: "reject", feedback: row.feedback ?? undefined };
-      }
+    } finally {
+      this.waiting?.exit();
     }
 
     await prisma.planApprovalPrompt.update({
@@ -212,6 +230,27 @@ class InteractivePlanBridge implements PlanApprovalBridge {
       await runService.updateStatus(this.runId, "running");
     }
     return null;
+  }
+}
+
+/**
+ * 交互等待门：审批/征询/计划卡片挂着等待用户期间为真。agent-runtime 的
+ * 空闲看门狗据此暂停计时——等待用户时模型流本来就没有分片，不能算提供
+ * 方挂起，否则用户还没作答回合就被自动中断了。
+ */
+export class InteractiveWaitGate {
+  private depth = 0;
+
+  enter() {
+    this.depth += 1;
+  }
+
+  exit() {
+    this.depth = Math.max(0, this.depth - 1);
+  }
+
+  get pending() {
+    return this.depth > 0;
   }
 }
 
@@ -257,9 +296,10 @@ class ThreadRunService {
    */
   registerAbortSource(runId: string, projectId?: string) {
     const controller = new AbortController();
-    const approvals = new InteractiveApprovalBridge(runId, controller.signal, projectId);
-    const asks = new InteractiveAskBridge(runId, controller.signal);
-    const plans = new InteractivePlanBridge(runId, controller.signal);
+    const waiting = new InteractiveWaitGate();
+    const approvals = new InteractiveApprovalBridge(runId, controller.signal, projectId, waiting);
+    const asks = new InteractiveAskBridge(runId, controller.signal, waiting);
+    const plans = new InteractivePlanBridge(runId, controller.signal, waiting);
     const handle: ActiveRunHandle = {
       abort: () => controller.abort(),
       approvals,
@@ -273,6 +313,7 @@ class ThreadRunService {
       approvals,
       asks,
       plans,
+      waiting,
       cleanup: () => {
         this.activeRuns.delete(runId);
       },

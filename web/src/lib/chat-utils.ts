@@ -74,6 +74,20 @@ export interface SubagentEventData {
   error?: string;
 }
 
+/** 回合结束时推送的修改/产物汇总（data-oh:changes），渲染成可点击预览的
+ * "文件已更改"卡片。 */
+export interface TurnChangesData {
+  files: Array<{
+    /** 工作区相对路径（正斜杠），卡片展示用。 */
+    path: string;
+    /** 绝对路径，点击条目时交给预览面板。 */
+    absolutePath: string;
+    changeKind: "create" | "edit" | "delete" | "artifact";
+    additions: number;
+    deletions: number;
+  }>;
+}
+
 export type ChatUIMessage = UIMessage<
   unknown,
   {
@@ -87,6 +101,7 @@ export type ChatUIMessage = UIMessage<
     "oh:compaction.done": { messagesRemoved: number };
     "oh:retry": { attempt: number; reason: string };
     "oh:preview.open": PreviewOpenData;
+    "oh:changes": TurnChangesData;
   }
 >;
 

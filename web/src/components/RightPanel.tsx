@@ -74,6 +74,8 @@ export interface RightPanelProps {
   previewTarget: PreviewTarget | null;
   /** 工具结果里的链接点击后送进内置浏览器面板（与聊天链接行为一致）。 */
   onOpenLink?: (url: string) => void;
+  /** 文件树里点击 office/图片等二进制文件时改在预览面板打开。 */
+  onOpenFile?: (filePath: string) => void;
 }
 
 function RightPanelBase({
@@ -90,6 +92,7 @@ function RightPanelBase({
   contextWindow,
   previewTarget,
   onOpenLink,
+  onOpenFile,
 }: RightPanelProps) {
   return (
     <aside
@@ -141,7 +144,11 @@ function RightPanelBase({
         </TabsList>
 
         <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
-          <FileBrowser key={project?.id ?? "workspace"} project={project} />
+          <FileBrowser
+            key={project?.id ?? "workspace"}
+            project={project}
+            onOpenFile={onOpenFile}
+          />
         </TabsContent>
         {/* forceMount 保持 iframe 与导航历史跨标签存活；Radix 对 forceMount
             的内容不设 hidden，需要自己按 data-state 收起，否则浏览器会
@@ -205,7 +212,27 @@ function EmptyNote({ text }: { text: string }) {
   return <p className="py-10 text-center text-xs text-muted-foreground">{text}</p>;
 }
 
-function FileBrowser({ project }: { project?: ProjectInfo | null }) {
+/** 这些扩展名的文件文本视图显示不了（office）或体验差（大图），点击时
+ * 改在预览面板打开：office 走 file-viewer，图片/PDF 走 /preview 路由。 */
+const PANEL_PREVIEW_EXTENSIONS = new Set([
+  "pptx", "docx", "xlsx", "pdf",
+  "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "ico",
+  "mp4", "webm", "mp3", "wav",
+]);
+
+function fileExtension(filePath: string): string {
+  const name = filePath.split(/[\\/]/).at(-1) ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
+function FileBrowser({
+  project,
+  onOpenFile,
+}: {
+  project?: ProjectInfo | null;
+  onOpenFile?: (filePath: string) => void;
+}) {
   const rootPath = project?.rootPath ?? "";
   const rootLabel =
     project?.name ??
@@ -270,9 +297,15 @@ function FileBrowser({ project }: { project?: ProjectInfo | null }) {
   const handleSelect = useCallback(
     (path: string) => {
       setSelected(path);
-      if (isFilePath(path)) setSelectedFile(path);
+      if (!isFilePath(path)) return;
+      // 文本类文件留在面板内查看；office/图片等走预览面板（浏览器标签）。
+      if (PANEL_PREVIEW_EXTENSIONS.has(fileExtension(path))) {
+        onOpenFile?.(path);
+        return;
+      }
+      setSelectedFile(path);
     },
-    [isFilePath],
+    [isFilePath, onOpenFile],
   );
 
   const renderDir = (dirPath: string): ReactNode =>
