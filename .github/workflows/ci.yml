@@ -35,6 +35,8 @@ jobs:
 
       - name: Build web
         run: pnpm --filter web build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   rust:
     name: Cargo check
@@ -43,11 +45,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # generate_context! 编译期需要 web/dist 前端资源，tauri.conf.json 的
+      # externalBin 需要 sidecar 二进制，缺一 cargo check 即失败
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter server prisma:generate
+
+      - name: Prepare Node SEA sidecar
+        run: node scripts/prepare-sidecar.mjs
+
+      - name: Build web frontend
+        run: pnpm --filter web build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml

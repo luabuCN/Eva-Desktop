@@ -110,6 +110,10 @@ jobs:
 
       - name: Build Tauri bundles
         run: pnpm exec tauri build --bundles ${{ matrix.bundles }}
+        env:
+          # beforeBuildCommand 里的 vite build 在 7GB 内存的 macOS runner 上
+          # 会撞上 Node 24 按机器内存比例设定的 ~2GB 堆上限，显式放宽
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

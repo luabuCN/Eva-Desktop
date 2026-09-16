@@ -16,6 +16,22 @@ export default defineConfig({
     fileViewerRenderers({ copyAssets: true, inject: false }),
   ],
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      output: {
+        // @file-viewer 复制的部分 vendor 资产（LICENSE/NOTICE）没有扩展名，
+        // 默认模板 assets/[name]-[hash][extname] 会生成以 "." 结尾的文件名，
+        // 在 Windows 上非法，Tauri 编译期嵌入资源时读取失败；补上 .txt。
+        assetFileNames: (assetInfo) => {
+          const raw = assetInfo.names?.[0] ?? (assetInfo as { name?: string }).name ?? "asset";
+          const dot = raw.lastIndexOf(".");
+          const base = (dot > 0 ? raw.slice(0, dot) : raw).replace(/[^\w.-]+/g, "_");
+          const ext = dot > 0 ? raw.slice(dot) : ".txt";
+          return `assets/${base}-[hash]${ext}`;
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
