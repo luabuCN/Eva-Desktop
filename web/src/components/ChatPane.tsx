@@ -3,7 +3,13 @@ import { isToolUIPart } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
 import { parseWikiHref } from "@/lib/chat-utils";
+import { friendlyErrorText, rawErrorDetail } from "@/lib/error-display";
 import { prepareAttachments } from "@/lib/attachments";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   BookMarked,
   Check,
@@ -643,9 +649,26 @@ function AssistantLoadingView({ effort }: { effort: ReasoningEffort }) {
 }
 
 function AssistantErrorView({ message }: { message: string }) {
+  const friendly = friendlyErrorText(message);
+  const detail = rawErrorDetail(message);
   return (
-    <div className="w-full rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-      {message}
+    <div className="w-full space-y-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      <div className="flex items-start gap-2">
+        <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
+        <span className="min-w-0 break-words">{friendly}</span>
+      </div>
+      {detail ? (
+        <Collapsible className="text-xs">
+          <CollapsibleTrigger className="text-muted-foreground underline-offset-2 hover:underline">
+            技术详情
+          </CollapsibleTrigger>
+          <CollapsibleContent className="outline-none">
+            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px] text-muted-foreground">
+              {detail}
+            </pre>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
     </div>
   );
 }

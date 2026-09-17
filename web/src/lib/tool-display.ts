@@ -142,13 +142,39 @@ export function describeTool(part: ToolPart): ToolDisplay {
         summary: dir ? truncateSummary(`${pattern} @ ${dir}`) : truncateSummary(pattern),
       };
     }
-    case "bash":
+    case "bash": {
+      const command = firstLine(pickString(input, ["command"]) ?? "");
+      const background = input?.runInBackground === true;
       return {
         action: "run",
-        verb: "运行",
-        runningVerb: running("运行"),
-        // 命令可能很长，只取首行再截断
-        summary: truncateSummary(firstLine(pickString(input, ["command"]) ?? "")),
+        verb: background ? "后台运行" : "运行",
+        runningVerb: background ? "转后台运行" : running("运行"),
+        // 命令可能很长，只取首行再截断；后台命令加标记一眼可辨。
+        summary: truncateSummary(background ? `[后台] ${command}` : command),
+      };
+    }
+    case "bashTaskOutput": {
+      const blocking = input?.block === true;
+      return {
+        action: "run",
+        verb: blocking ? "等待后台任务" : "查看后台任务",
+        runningVerb: blocking ? "等待后台任务" : running("查看后台任务"),
+        summary: summaryOf(input),
+      };
+    }
+    case "bashTaskList":
+      return {
+        action: "list",
+        verb: "后台任务列表",
+        runningVerb: running("查看"),
+        summary: "",
+      };
+    case "bashTaskStop":
+      return {
+        action: "run",
+        verb: "停止后台任务",
+        runningVerb: running("停止"),
+        summary: summaryOf(input),
       };
     case "webSearch":
       return {

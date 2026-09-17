@@ -20,6 +20,35 @@ export interface ShellResult {
   exitCode: number;
 }
 
+/** 平台 shell 包装：与 SafeShellProvider.exec 共用同一 invocation，保证
+ * 前台/后台命令的 shell 语义一致（PowerShell 的 LASTEXITCODE 透传等）。 */
+export interface ShellInvocation {
+  executable: string;
+  args: string[];
+}
+
+export function shellInvocation(command: string): ShellInvocation {
+  if (process.platform === "win32") {
+    return {
+      executable: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        [
+          "$ErrorActionPreference = 'Stop'",
+          command,
+          "if (Get-Variable LASTEXITCODE -ErrorAction Ignore) { exit $LASTEXITCODE }",
+        ].join("\n"),
+      ],
+    };
+  }
+
+  return { executable: "bash", args: ["-c", command] };
+}
+
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export class FileTooLargeError extends Error {
@@ -138,25 +167,7 @@ export class SafeShellProvider {
   }
 
   private invocation(command: string) {
-    if (process.platform === "win32") {
-      return {
-        executable: "powershell.exe",
-        args: [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          [
-            "$ErrorActionPreference = 'Stop'",
-            command,
-            "if (Get-Variable LASTEXITCODE -ErrorAction Ignore) { exit $LASTEXITCODE }",
-          ].join("\n"),
-        ],
-      };
-    }
-
-    return { executable: "bash", args: ["-c", command] };
+    return shellInvocation(command);
   }
 
   exec(command: string, options?: { timeout?: number; cwd?: string }): Promise<ShellResult> {

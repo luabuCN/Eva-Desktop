@@ -17,7 +17,12 @@ import type { ChatUIMessage } from "../chat-types.js";
 import { agentConfigService } from "./agents.js";
 import { materializeAttachments } from "./attachments.js";
 import { DelegationHub, type DelegationNotice } from "./delegation-hub.js";
+import {
+  BackgroundTaskHub,
+  type BackgroundTaskNotice,
+} from "./background-tasks.js";
 import { prepareCompactedMessages } from "./compaction.js";
+import { friendlyModelErrorText } from "./model-errors.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
@@ -199,6 +204,13 @@ class AgentRuntimeService {
         runContext.delegate = delegationHub;
       }
 
+      // 后台任务中心：bash(runInBackground=true) 的后端。注册表模块级、跨
+      // 回合存活；这里只挂 per-run 实例（携带通知流）。必须在
+      // createToolSet 之前注入：WorkspaceToolProvider 依据桥是否存在决定
+      // 是否贡献 bashTask* 工具。
+      const backgroundTaskHub = new BackgroundTaskHub();
+      runContext.backgroundTasks = backgroundTaskHub;
+
       const tools = await toolProviderRegistry.createToolSet(runContext);
       const maxSteps = mode === "deep" ? 120 : 80;
 
@@ -318,6 +330,13 @@ class AgentRuntimeService {
         .trim()
         .slice(0, 80);
 
+      // 模型流报错（读循环里改写 error 分片）或 execute 阶段异常（onError
+      // 回调）都会置位；onFinish 据此把运行记为 failed 而不是 completed——
+      // 否则历史里失败回合没有结论、重进会话也不出现"上次回合失败"提示。
+      // lastFriendlyError 存改写后的文案，落库后重进会话的失败提示自包含。
+      let sawStreamError = false;
+      let lastFriendlyError: string | undefined;
+
       const uiStream = createUIMessageStream<ChatUIMessage>({
         originalMessages: messages,
         execute: async ({ writer }) => {
@@ -344,6 +363,15 @@ class AgentRuntimeService {
           delegationHub.notify = (notice: DelegationNotice) => {
             markAlive();
             const type = `data-oh:subagent.${notice.kind}` as const;
+            writer.write({ type, id: crypto.randomUUID(), data: notice });
+          };
+          // 后台任务直播：启动/输出进度/完成事件以 data-oh:bgtask.* 部件
+          // 推入主流，前端折叠为实时卡片。与委派同理：直写 writer、不经
+          // 过读循环，看门狗视为活性证据（bashTaskOutput 阻塞等待期间的
+          // 保活心跳也走这里）。
+          backgroundTaskHub.notify = (notice: BackgroundTaskNotice) => {
+            markAlive();
+            const type = `data-oh:bgtask.${notice.kind}` as const;
             writer.write({ type, id: crypto.randomUUID(), data: notice });
           };
           const reader = sourceChunks.getReader();
@@ -391,9 +419,18 @@ class AgentRuntimeService {
             }
             if (chunk.done) break;
             lastChunkAt = Date.now();
-            writer.write(chunk.value);
+            let out = chunk.value;
+            // 模型/传输层错误的原文（含堆栈的 JSON dump、内部 URL）不直达
+            // 客户端：在流出口改写为友好文案，原始错误保留在服务端日志。
+            if (out.type === "error" && out.errorText) {
+              sawStreamError = true;
+              console.error("[agent-stream] raw error part:", out.errorText);
+              lastFriendlyError = friendlyModelErrorText(out.errorText);
+              out = { ...out, errorText: lastFriendlyError };
+            }
+            writer.write(out);
             persistChain = persistChain
-              .then(() => runService.appendTransition(run.id, chunk.value.type, chunk.value))
+              .then(() => runService.appendTransition(run.id, out.type, out))
               .catch(console.error);
           }
           clearInterval(idleTimer);
@@ -485,7 +522,13 @@ class AgentRuntimeService {
             finalMessages as ChatUIMessage[],
             persistedTitle,
           );
-          await runService.finish(run.id, isAborted ? "aborted" : "completed");
+          await runService.finish(
+            run.id,
+            isAborted ? "aborted" : sawStreamError ? "failed" : "completed",
+            sawStreamError && !isAborted
+              ? lastFriendlyError ?? "模型调用失败，回合未完成"
+              : undefined,
+          );
           releaseOwnership();
           // 知识库自动总结：回合正常完成且产生了文字总结时入队（串行队列
           // 后台消费，与聊天流完全解耦；同会话排队任务自动合并窗口）。
@@ -508,15 +551,21 @@ class AgentRuntimeService {
         },
         onError: (error) => {
           console.error(error);
-          return "The local agent run failed.";
+          sawStreamError = true;
+          return friendlyModelErrorText(
+            error instanceof Error ? error.message : String(error),
+          );
         },
       });
 
       // Some transport failures end before an AI SDK finish callback; release
       // the run's controller ownership when ownership work has stopped, and
-      // stop every delegation the run left running.
+      // stop every delegation the run left running. Background tasks are NOT
+      // stopped: their registry outlives the run by design (a long install
+      // keeps running and is queryable next turn); only detach the notifier.
       void ownershipComplete.finally(() => {
         delegationHub.dispose();
+        backgroundTaskHub.notify = undefined;
         activeRun.cleanup();
       });
       activeRun.signal.addEventListener("abort", () => {

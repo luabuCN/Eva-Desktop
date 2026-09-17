@@ -99,3 +99,42 @@ export interface DelegationBridge {
 }
 
 export type { PermissionMode };
+
+/** One background shell task started by bash(runInBackground=true). */
+export interface BackgroundTaskRecord {
+  taskId: string;
+  conversationId: string;
+  command: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  /** 进程退出码；spawn 失败/超时强杀时缺省。 */
+  exitCode?: number;
+  startedAt: number;
+  completedAt?: number;
+  stdoutTail: string;
+  stderrTail: string;
+  error?: string;
+}
+
+/**
+ * Bridge injected by agent-runtime: the bashTask* tools marshal arguments,
+ * the hub (which owns the process registry) does the spawning. 任务跨回合
+ * 存活（注册表模块级），回合结束只解绑通知流，进程继续跑完。
+ */
+export interface BackgroundTaskBridge {
+  start(input: {
+    command: string;
+    cwd: string;
+    conversationId: string;
+  }): Promise<{ ok: true; taskId: string } | { ok: false; error: string }>;
+  output(input: {
+    taskId?: string;
+    conversationId: string;
+    block?: boolean;
+    timeoutSeconds?: number;
+  }): Promise<
+    | { ok: true; task: BackgroundTaskRecord; durationMs: number; note?: string }
+    | { ok: false; error: string }
+  >;
+  list(conversationId: string): BackgroundTaskRecord[];
+  stop(taskIds?: string[], conversationId?: string): number;
+}

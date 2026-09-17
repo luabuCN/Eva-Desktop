@@ -53,6 +53,7 @@ import {
   type ChatUIMessage,
   type ToolCallRef,
 } from "@/lib/chat-utils";
+import { friendlyErrorText } from "@/lib/error-display";
 import { cn } from "@/lib/utils";
 
 export type RightTab = "files" | "browser" | "terminal" | "tasks" | "changes" | "git" | "tools" | "usage";
@@ -613,7 +614,7 @@ function ToolDetail({ call, onOpenLink }: { call: ToolCallRef; onOpenLink?: (url
 
       {"errorText" in part && part.errorText ? (
         <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
-          {part.errorText}
+          {friendlyErrorText(part.errorText)}
         </div>
       ) : null}
 

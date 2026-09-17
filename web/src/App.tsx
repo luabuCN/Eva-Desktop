@@ -64,6 +64,7 @@ import {
 } from "@/components/ui/dialog";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { lastAssistantHasText } from "./lib/chat-utils";
+import { friendlyErrorText } from "./lib/error-display";
 
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
@@ -392,7 +393,7 @@ function SessionView({
     return latestRun.status === "failed"
       ? {
           kind: "failed",
-          message: `上次回合失败${latestRun.error ? `：${latestRun.error}` : "，未生成文字总结"}`,
+          message: `上次回合失败${latestRun.error ? `：${friendlyErrorText(latestRun.error)}` : "，未生成文字总结"}`,
         }
       : { kind: "aborted", message: "上次回合已被中止，未生成文字总结" };
   }, [busy, latestRun, chat.messages]);

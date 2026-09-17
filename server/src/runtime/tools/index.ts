@@ -3,6 +3,8 @@ export type {
   ApprovalDecision,
   AskUserBridge,
   AskUserQuestion,
+  BackgroundTaskBridge,
+  BackgroundTaskRecord,
   DelegationBridge,
   DelegationRecord,
   PermissionMode,

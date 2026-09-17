@@ -74,6 +74,18 @@ export interface SubagentEventData {
   error?: string;
 }
 
+/** 后台 shell 任务的直播事件（data-oh:bgtask.*，由 BackgroundTaskHub 推送）。 */
+export interface BgTaskEventData {
+  kind: "start" | "progress" | "done" | "error";
+  taskId: string;
+  command: string;
+  tail?: string;
+  status?: "completed" | "failed" | "stopped";
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+}
+
 /** 回合结束时推送的修改/产物汇总（data-oh:changes），渲染成可点击预览的
  * "文件已更改"卡片。 */
 export interface TurnChangesData {
@@ -98,6 +110,10 @@ export type ChatUIMessage = UIMessage<
     "oh:subagent.progress": SubagentEventData;
     "oh:subagent.done": SubagentEventData;
     "oh:subagent.error": SubagentEventData;
+    "oh:bgtask.start": BgTaskEventData;
+    "oh:bgtask.progress": BgTaskEventData;
+    "oh:bgtask.done": BgTaskEventData;
+    "oh:bgtask.error": BgTaskEventData;
     "oh:compaction.done": { messagesRemoved: number };
     "oh:retry": { attempt: number; reason: string };
     "oh:preview.open": PreviewOpenData;

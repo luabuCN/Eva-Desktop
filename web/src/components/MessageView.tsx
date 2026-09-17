@@ -59,6 +59,7 @@ import {
   messageText,
   splitCronContext,
   stripCronContext,
+  type BgTaskEventData,
   type ChatUIMessage,
   type CronContextInfo,
   type SubagentEventData,
@@ -84,8 +85,11 @@ function MessageViewBase({
 
   // 连续的 reasoning / tool 调用归为一个“活动”块，整块折叠成一行
   // （“处理中 … / 已处理 · N 个步骤”）；其余 part 原样渲染。
-  // 委派子智能体的 data-oh:subagent.* 事件先折叠为单张实时卡片。
-  const parts = useMemo(() => collapseSubagentParts(message.parts), [message.parts]);
+  // 委派子智能体与后台 shell 任务的事件分别折叠为各自的实时卡片。
+  const parts = useMemo(
+    () => collapseBgTaskParts(collapseSubagentParts(message.parts)),
+    [message.parts],
+  );
   const blocks = useMemo(() => groupParts(parts), [parts]);
 
   const renderAssistantPart = (
@@ -95,6 +99,9 @@ function MessageViewBase({
   ): ReactNode => {
     if (part.type === "oh-delegation-card") {
       return <DelegationCard key={`delegation-${part.data.delegationId}`} data={part.data} />;
+    }
+    if (part.type === "oh-bgtask-card") {
+      return <BgTaskCard key={`bgtask-${part.data.taskId}`} data={part.data} />;
     }
     if (part.type === "text") {
       return (
@@ -214,7 +221,20 @@ interface DelegationCardData {
 }
 
 type DelegationCardPart = { type: "oh-delegation-card"; data: DelegationCardData };
-type RenderablePart = ChatUIMessage["parts"][number] | DelegationCardPart;
+
+/** 一个后台 shell 任务的聚合视图：start/progress/done/error 事件折叠成这一张卡。 */
+interface BgTaskCardData {
+  taskId: string;
+  command: string;
+  tail?: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+type BgTaskCardPart = { type: "oh-bgtask-card"; data: BgTaskCardData };
+type RenderablePart = ChatUIMessage["parts"][number] | DelegationCardPart | BgTaskCardPart;
 
 /** 把同一委派的全部 data-oh:subagent.* 事件折叠为一张卡片（位置取 start
  * 首次出现处；缺 start 的孤儿事件——例如回放截断——在首次出现处建卡）。 */
@@ -257,6 +277,46 @@ function collapseSubagentParts(parts: ChatUIMessage["parts"]): RenderablePart[] 
       card.status = "failed";
       card.error = data.error;
       card.currentTool = undefined;
+    }
+  }
+  return out;
+}
+
+/** 把同一后台任务的全部 data-oh:bgtask.* 事件折叠为一张卡片（位置取 start
+ * 首次出现处；孤儿事件就地建卡），progress 的输出尾部持续覆盖 tail。 */
+function collapseBgTaskParts(parts: RenderablePart[]): RenderablePart[] {
+  if (!parts.some((part) => part.type?.startsWith?.("data-oh:bgtask."))) return parts;
+  const out: RenderablePart[] = [];
+  const cards = new Map<string, BgTaskCardData>();
+  for (const part of parts) {
+    if (typeof part.type !== "string" || !part.type.startsWith("data-oh:bgtask.")) {
+      out.push(part);
+      continue;
+    }
+    const data = (part as { data?: BgTaskEventData }).data;
+    if (!data) continue;
+    const key = data.taskId || "unknown";
+    let card = cards.get(key);
+    if (!card) {
+      card = {
+        taskId: key,
+        command: data.command || "后台命令",
+        status: "running",
+      };
+      cards.set(key, card);
+      out.push({ type: "oh-bgtask-card", data: card });
+    }
+    if (part.type === "data-oh:bgtask.start") {
+      if (data.command) card.command = data.command;
+    } else if (part.type === "data-oh:bgtask.progress") {
+      if (data.tail) card.tail = data.tail;
+    } else if (part.type === "data-oh:bgtask.done") {
+      card.status = data.status ?? "completed";
+      card.exitCode = data.exitCode;
+      card.durationMs = data.durationMs;
+    } else if (part.type === "data-oh:bgtask.error") {
+      card.status = "failed";
+      card.error = data.error;
     }
   }
   return out;
@@ -414,7 +474,11 @@ function groupParts(parts: RenderablePart[]): AssistantBlock[] {
       activity.push({ kind: "thinking", part });
       return;
     }
-    if (part.type !== "oh-delegation-card" && isToolUIPart(part)) {
+    if (
+      part.type !== "oh-delegation-card" &&
+      part.type !== "oh-bgtask-card" &&
+      isToolUIPart(part)
+    ) {
       activity = activity ?? [];
       activity.push({ kind: "tool", part });
       return;
@@ -627,6 +691,86 @@ const DelegationCard = memo(function DelegationCard({ data }: { data: Delegation
         <div className="ml-3 space-y-1.5 border-l py-1 pl-3 text-xs text-muted-foreground">
           {data.task ? (
             <p className="whitespace-pre-wrap break-words">{data.task}</p>
+          ) : null}
+          {failed && data.error ? (
+            <p className="break-words text-red-600">{data.error}</p>
+          ) : null}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
+
+/** 后台 shell 任务卡片：一行头部（命令 + 实时状态/退出码/时长），展开看
+ * 输出尾部（progress 事件持续滚动覆盖）。骨架与 DelegationCard 一致。 */
+const BgTaskCard = memo(function BgTaskCard({ data }: { data: BgTaskCardData }) {
+  const running = data.status === "running";
+  const [open, setOpen] = useState(running);
+  const wasRunningRef = useRef(running);
+
+  // 运行→结束时自动收起；再次开始（同 id 复用极罕见）则重新展开。
+  useEffect(() => {
+    if (wasRunningRef.current !== running) {
+      setOpen(running);
+      wasRunningRef.current = running;
+    }
+  }, [running]);
+
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    setElapsed(0);
+    const startedAt = Date.now();
+    const id = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [running]);
+
+  const failed = data.status === "failed";
+  const stopped = data.status === "stopped";
+  const duration = data.durationMs
+    ? formatDuration(data.durationMs)
+    : running
+      ? `${elapsed}s`
+      : "";
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/bgtask w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <TerminalIcon className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-mono">{data.command}</span>
+        {running ? (
+          <Shimmer as="span" duration={1.6}>后台运行中</Shimmer>
+        ) : failed ? (
+          <span className="flex shrink-0 items-center gap-1 text-red-600">
+            <XCircleIcon className="size-3" />
+            失败
+          </span>
+        ) : stopped ? (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <MinusIcon className="size-3" />
+            已停止
+          </span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <CheckIcon className="size-3 text-green-600" />
+            完成
+          </span>
+        )}
+        {!running && data.exitCode !== undefined ? (
+          <span className="shrink-0 font-mono">exit {data.exitCode}</span>
+        ) : null}
+        {duration ? <span className="shrink-0 text-[11px]">· {duration}</span> : null}
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/bgtask:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="outline-none">
+        <div className="ml-3 max-h-40 space-y-1.5 overflow-y-auto border-l py-1 pl-3 text-xs text-muted-foreground">
+          {data.tail ? (
+            <pre className="whitespace-pre-wrap break-words font-mono">{data.tail}</pre>
+          ) : running ? (
+            <Shimmer duration={2}>等待输出…</Shimmer>
           ) : null}
           {failed && data.error ? (
             <p className="break-words text-red-600">{data.error}</p>

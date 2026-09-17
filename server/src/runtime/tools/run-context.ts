@@ -2,6 +2,7 @@ import { UNKNOWN_TOOL_POLICY } from "./policies.js";
 import type {
   ApprovalBridge,
   AskUserBridge,
+  BackgroundTaskBridge,
   DelegationBridge,
   PermissionMode,
   PlanApprovalBridge,
@@ -42,6 +43,9 @@ export interface RunContextInit {
   escalateFromPlan?: (mode: PermissionMode) => void;
   /** Delegate 工具的委派桥；子智能体上下文不带，委派不能再生委派。 */
   delegate?: DelegationBridge;
+  /** bash(runInBackground=true) 的后台任务桥；注册表跨回合存活，子智能体
+   * 上下文经派生展开继承（子代理也能查询/等待后台任务）。 */
+  backgroundTasks?: BackgroundTaskBridge;
   signal?: AbortSignal;
   /** True for derived sub-agent contexts (no per-conversation task tools). */
   subAgent?: boolean;
