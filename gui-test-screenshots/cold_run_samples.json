@@ -1,0 +1,506 @@
+[
+ {
+  "t": 1131,
+  "chips": [],
+  "logLen": 35,
+  "logTail": "小程序的邀请码是在哪个文件里提取的？只回答文件名和一句话说明。复制消息",
+  "stopBtn": true
+ },
+ {
+  "t": 2154,
+  "chips": [
+   "正在搜索小程序 邀请码 提取运行中"
+  ],
+  "logLen": 52,
+  "logTail": "小程序的邀请码是在哪个文件里提取的？只回答文件名和一句话说明。复制消息正在搜索小程序 邀请码 提取运行中",
+  "stopBtn": true
+ },
+ {
+  "t": 3176,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 53,
+  "logTail": "小程序的邀请码是在哪个文件里提取的？只回答文件名和一句话说明。复制消息搜索知识库小程序 邀请码 提取已完成",
+  "stopBtn": true
+ },
+ {
+  "t": 4205,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 120,
+  "logTail": ".vue — 在 onLaunch / onShow 中通过 options.query.scene 获取并解码邀请码。",
+  "stopBtn": true
+ },
+ {
+  "t": 5228,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 124,
+  "logTail": " — 在 onLaunch / onShow 中通过 options.query.scene 获取并解码邀请码。复制消息",
+  "stopBtn": false
+ },
+ {
+  "t": 6241,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 124,
+  "logTail": " — 在 onLaunch / onShow 中通过 options.query.scene 获取并解码邀请码。复制消息",
+  "stopBtn": false
+ },
+ {
+  "t": 7261,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 124,
+  "logTail": " — 在 onLaunch / onShow 中通过 options.query.scene 获取并解码邀请码。复制消息",
+  "stopBtn": false
+ },
+ {
+  "t": 8280,
+  "chips": [
+   "搜索知识库小程序 邀请码 提取已完成"
+  ],
+  "logLen": 124,
+  "logTail": " — 在 onLaunch / onShow 中通过 options.query.scene 获取并解码邀请码。复制消息",
+  "stopBtn": false
+ },
+ {
+  "t": 9318,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 10354,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 11372,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 12392,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 13401,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 14410,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 15425,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 16436,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 17449,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 18466,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 19482,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 20497,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 21511,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 22524,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 23533,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 24554,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 25573,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 26588,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 27620,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 28646,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 29655,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 30663,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 31678,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 32713,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 33756,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 34774,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 35793,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 36810,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 37820,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 38833,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 39846,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 40859,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 41886,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 42899,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 43932,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 44942,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 45957,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 46967,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 47984,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 48991,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 50002,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 51012,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 52026,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 53041,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 54057,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 55075,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 56090,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 57115,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 58132,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 59167,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 60200,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 61219,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 62244,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 63258,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 64278,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 65294,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 66307,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 67327,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 68347,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 69372,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 70383,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ },
+ {
+  "t": 71403,
+  "chips": [],
+  "logLen": 0,
+  "logTail": "",
+  "stopBtn": false
+ }
+]

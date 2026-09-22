@@ -373,7 +373,9 @@ function hasPreviewableExtension(candidate: string): boolean {
 }
 
 function fileLinkHref(path: string): string {
-  return `open-file:${encodeURIComponent(path)}`;
+  // 自定义协议（open-file:）会被 streamdown 内置 sanitize 的协议白名单
+  // 剥掉 href（渲染成 [blocked]）；相对路径形式可正常通过。
+  return `/open-file/${encodeURIComponent(path)}`;
 }
 
 /** Windows 绝对路径里不会出现的空白与 markdown/URL 语法字符。 */
@@ -424,7 +426,7 @@ function normalizeFileLinkHref(href: string): string | null {
 
 function rewriteFileLinkHrefs(piece: string): string {
   return piece.replace(/\]\(([^)\s]+)\)/g, (match, href: string) => {
-    if (href.startsWith("open-file:")) return match;
+    if (href.startsWith("/open-file/")) return match;
     const filePath = normalizeFileLinkHref(href);
     return filePath ? `](${fileLinkHref(filePath)})` : match;
   });
@@ -439,7 +441,7 @@ function linkifyInlineCodePath(piece: string): string {
   return `[${inner}](${fileLinkHref(inner)})`;
 }
 
-/** 把消息里可预览的文件路径转成 open-file: 链接，点击后右侧面板打开
+/** 把消息里可预览的文件路径转成 /open-file/ 链接，点击后右侧面板打开
  * 预览。与 linkifyUrls 同一道防线：跳过代码围栏与行内代码（重写 href
  * 只作用于围栏外的普通文本段）。 */
 function linkifyFilePaths(text: string): string {
@@ -1099,7 +1101,7 @@ function TurnChangesCard({ data }: { data: TurnChangesData }) {
                 key={file.absolutePath}
                 type="button"
                 title={`点击预览 ${file.absolutePath}`}
-                onClick={() => openFile?.(`open-file:${encodeURIComponent(file.absolutePath)}`)}
+                onClick={() => openFile?.(`/open-file/${encodeURIComponent(file.absolutePath)}`)}
                 className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/50"
               >
                 <FileTypeIcon

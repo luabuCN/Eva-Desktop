@@ -148,7 +148,7 @@ Eva Desktop 把界面、智能体运行时和桌面能力分成三层：
 
 ```bash
 pnpm install   # 安装依赖并生成 Prisma Client
-pnpm dev       # 同时启动 API(8878) + Vite(5173) + Tauri 窗口
+pnpm dev       # 同时启动 API(8878) + Vite(8089) + Tauri 窗口
 ```
 
 数据库在 `.local-data/` 下自动创建并建表；只需要 Web 界面调试时可分别运行 `pnpm dev:api` / `pnpm dev:web`。

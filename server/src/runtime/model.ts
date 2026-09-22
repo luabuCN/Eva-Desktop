@@ -61,6 +61,23 @@ async function createModelForMode(
               ...(effort && effort !== "off" ? { reasoning_effort: effort } : {}),
             }),
           };
+          // 请求体积观测：混合内容按 ~4 字符/token 粗估，帮助定位上下文
+          // 膨胀。仅打一行摘要，不打正文。OPENHARNESS_LOG_PROMPT_SIZE 开启。
+          if (process.env.OPENHARNESS_LOG_PROMPT_SIZE) {
+            const msgs = Array.isArray(body.messages) ? body.messages : [];
+            let chars = 0;
+            for (const m of msgs) {
+              const c = m?.content;
+              if (typeof c === "string") chars += c.length;
+              else if (Array.isArray(c))
+                for (const p of c)
+                  chars += typeof p?.text === "string" ? p.text.length : 0;
+            }
+            const toolsLen = body.tools ? JSON.stringify(body.tools).length : 0;
+            console.log(
+              `[prompt-size] messages=${msgs.length} msgChars=${chars}(~${Math.round(chars / 4)}tok) toolsChars=${toolsLen}(~${Math.round(toolsLen / 4)}tok)`,
+            );
+          }
         } catch {
           // Leave unparseable bodies untouched so the provider surfaces the error.
         }

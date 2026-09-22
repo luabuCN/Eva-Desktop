@@ -34,7 +34,18 @@ const child = spawn("pnpm exec tauri dev", {
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => child.kill(signal));
+  process.on(signal, () => stopChild(signal));
+}
+
+function stopChild(signal) {
+  // shell:true 时 child.pid 只是 cmd.exe 包装进程，仅 child.kill 会留下
+  // cargo 启动的 eva-desktop.exe 孤儿——它锁着 target/debug 下的 exe，
+  // 下次编译删除旧文件时报 os error 5（拒绝访问）。整棵进程树一起结束。
+  if (process.platform === "win32" && child.pid) {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" });
+  } else {
+    child.kill(signal);
+  }
 }
 
 child.on("error", (error) => {

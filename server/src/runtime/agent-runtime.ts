@@ -463,13 +463,31 @@ class AgentRuntimeService {
                   inputTokens?: number;
                   outputTokens?: number;
                   totalTokens?: number;
+                  // 当前 @mastra/core 的累计 usage 是扁平结构，缓存/思考
+                  // 计数直接放在顶层；旧版嵌套字段保留兜底以防 SDK 回退。
+                  reasoningTokens?: number;
+                  cachedInputTokens?: number;
                   inputTokenDetails?: {
                     cacheReadTokens?: number;
                     cacheWriteTokens?: number;
                   };
                   outputTokenDetails?: { reasoningTokens?: number };
+                  raw?: {
+                    inputTokens?: { cacheRead?: number; cacheWrite?: number };
+                    outputTokens?: { reasoning?: number };
+                  };
                 })
               : undefined;
+          const cacheReadTokens =
+            usageRecord?.cachedInputTokens ??
+            usageRecord?.inputTokenDetails?.cacheReadTokens ??
+            usageRecord?.raw?.inputTokens?.cacheRead ??
+            0;
+          const reasoningTokens =
+            usageRecord?.reasoningTokens ??
+            usageRecord?.outputTokenDetails?.reasoningTokens ??
+            usageRecord?.raw?.outputTokens?.reasoning ??
+            0;
           const usagePart = {
             type: "data-oh:usage" as const,
             id: crypto.randomUUID(),
@@ -477,10 +495,12 @@ class AgentRuntimeService {
               inputTokens: usageRecord?.inputTokens ?? 0,
               outputTokens: usageRecord?.outputTokens ?? 0,
               totalTokens: usageRecord?.totalTokens ?? 0,
-              cacheReadTokens: usageRecord?.inputTokenDetails?.cacheReadTokens ?? 0,
-              cacheWriteTokens: usageRecord?.inputTokenDetails?.cacheWriteTokens ?? 0,
-              reasoningTokens:
-                usageRecord?.outputTokenDetails?.reasoningTokens ?? 0,
+              cacheReadTokens,
+              cacheWriteTokens:
+                usageRecord?.inputTokenDetails?.cacheWriteTokens ??
+                usageRecord?.raw?.inputTokens?.cacheWrite ??
+                0,
+              reasoningTokens,
               durationMs: Date.now() - turnStartedAt,
               providerId: effectiveSelection?.providerId,
               modelId: effectiveSelection?.modelId,

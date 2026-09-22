@@ -8,10 +8,11 @@ import {
   GitBranchIcon,
   GlobeIcon,
   ListTodoIcon,
-  SquareTerminalIcon,
   LoaderCircleIcon,
+  PlusIcon,
   RefreshCwIcon,
   WrenchIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { CodeBlock } from "@/components/ai-elements/code-block";
@@ -31,9 +32,14 @@ import {
 import { BrowserPane, type PreviewTarget } from "@/components/BrowserPane";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { GitPanel } from "@/components/GitPanel";
-import { TerminalPane } from "@/components/TerminalPane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   listFiles,
@@ -56,7 +62,38 @@ import {
 import { friendlyErrorText } from "@/lib/error-display";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "browser" | "terminal" | "tasks" | "changes" | "git" | "tools" | "usage";
+export type RightTab = "files" | "browser" | "tasks" | "changes" | "git" | "tools" | "usage";
+
+// —— 面板功能标签（卡片网格 + 可自定义） ——
+// 标签以「图标在上、文字在下」的卡片呈现，网格一行最多 4 个、超出换行；
+// 末尾的「+」卡片打开菜单勾选要显示的标签，选择持久化到 localStorage。
+const RIGHT_TAB_ITEMS: Array<{ id: RightTab; label: string; icon: LucideIcon }> = [
+  { id: "files", label: "文件", icon: FolderOpenIcon },
+  { id: "browser", label: "浏览器", icon: GlobeIcon },
+  { id: "tasks", label: "任务", icon: ListTodoIcon },
+  { id: "changes", label: "变更", icon: FileDiffIcon },
+  { id: "git", label: "Git", icon: GitBranchIcon },
+  { id: "tools", label: "工具结果", icon: WrenchIcon },
+  { id: "usage", label: "用量", icon: BarChart3Icon },
+];
+const ALL_RIGHT_TABS: RightTab[] = RIGHT_TAB_ITEMS.map((item) => item.id);
+const PANEL_TAB_STORAGE_KEY = "openharness.panel-tabs";
+
+function loadVisiblePanelTabs(): RightTab[] {
+  try {
+    const raw = window.localStorage.getItem(PANEL_TAB_STORAGE_KEY);
+    if (!raw) return ALL_RIGHT_TABS;
+    const saved: unknown = JSON.parse(raw);
+    if (Array.isArray(saved) && saved.every((id) => typeof id === "string" && ALL_RIGHT_TABS.includes(id as RightTab))) {
+      // 只保留认识的 id 并按注册表顺序重排；全部被关掉时回退为全部展示
+      const ordered = ALL_RIGHT_TABS.filter((id) => saved.includes(id));
+      return ordered.length > 0 ? ordered : ALL_RIGHT_TABS;
+    }
+  } catch {
+    // localStorage 不可用或内容损坏时回退为全部展示
+  }
+  return ALL_RIGHT_TABS;
+}
 
 export interface RightPanelProps {
   messages: ChatUIMessage[];
@@ -95,6 +132,37 @@ function RightPanelBase({
   onOpenLink,
   onOpenFile,
 }: RightPanelProps) {
+  // 标签显隐：用户通过「+」卡片菜单增删，localStorage 跨会话记忆
+  const [visibleTabs, setVisibleTabs] = useState<RightTab[]>(loadVisiblePanelTabs);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PANEL_TAB_STORAGE_KEY, JSON.stringify(visibleTabs));
+    } catch {
+      // 写入失败时仅本次会话生效
+    }
+  }, [visibleTabs]);
+
+  const togglePanelTab = useCallback((id: RightTab) => {
+    setVisibleTabs((prev) =>
+      prev.includes(id)
+        ? prev.filter((item) => item !== id)
+        : ALL_RIGHT_TABS.filter((tab) => prev.includes(tab) || tab === id),
+    );
+  }, []);
+
+  // 激活标签被取消勾选后切到第一个仍可见的标签，避免内容区悬空
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) {
+      onTabChange(visibleTabs[0] ?? "files");
+    }
+  }, [visibleTabs, tab, onTabChange]);
+
+  const visibleTabItems = useMemo(
+    () => RIGHT_TAB_ITEMS.filter((item) => visibleTabs.includes(item.id)),
+    [visibleTabs],
+  );
+
   return (
     <aside
       className="hidden min-w-0 shrink-0 flex-col bg-background lg:flex"
@@ -105,43 +173,47 @@ function RightPanelBase({
         onValueChange={(value) => onTabChange(value as RightTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        {/* 标签条保持单行紧凑：纵向禁止滚动（激活项下划线伪元素会溢出 5px），
-            横向可滚但隐藏滚动条——8px 的全局滚动条在标签栏下太笨重。
-            选中态只用淡主题色背景，不加边框和阴影。标签条位于窗口
-            标题栏下方，右端不会被自绘窗口按钮遮挡。 */}
-        <TabsList className="group-data-[orientation=horizontal]/tabs:h-9 w-full shrink-0 justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none border-b bg-transparent px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <TabsTrigger value="files" className={TAB_TRIGGER_CLASS}>
-            <FolderOpenIcon className="size-3.5" />
-            文件
-          </TabsTrigger>
-          <TabsTrigger value="browser" className={TAB_TRIGGER_CLASS}>
-            <GlobeIcon className="size-3.5" />
-            浏览器
-          </TabsTrigger>
-          <TabsTrigger value="terminal" className={TAB_TRIGGER_CLASS}>
-            <SquareTerminalIcon className="size-3.5" />
-            终端
-          </TabsTrigger>
-          <TabsTrigger value="tasks" className={TAB_TRIGGER_CLASS}>
-            <ListTodoIcon className="size-3.5" />
-            任务
-          </TabsTrigger>
-          <TabsTrigger value="changes" className={TAB_TRIGGER_CLASS}>
-            <FileDiffIcon className="size-3.5" />
-            变更
-          </TabsTrigger>
-          <TabsTrigger value="git" className={TAB_TRIGGER_CLASS}>
-            <GitBranchIcon className="size-3.5" />
-            Git
-          </TabsTrigger>
-          <TabsTrigger value="tools" className={TAB_TRIGGER_CLASS}>
-            <WrenchIcon className="size-3.5" />
-            工具结果
-          </TabsTrigger>
-          <TabsTrigger value="usage" className={TAB_TRIGGER_CLASS}>
-            <BarChart3Icon className="size-3.5" />
-            用量
-          </TabsTrigger>
+        {/* 标签为单行图标卡片（悬浮提示显示名称），高度控制在原两行文字
+            卡片的一半左右；面板更窄时自动换行。末尾「+」卡片打开菜单
+            勾选要显示的标签。整个标签区带浅灰底和底部分隔线。
+            基础样式用 group 变体锁了 h-9，必须用同前缀类压掉，
+            否则换行的卡片会溢出容器叠到内容区上。 */}
+        <TabsList className="flex h-auto w-full shrink-0 flex-wrap gap-1 rounded-none border-b bg-muted/40 p-1.5 group-data-[orientation=horizontal]/tabs:h-auto">
+          {visibleTabItems.map((item) => (
+            <TabsTrigger
+              key={item.id}
+              value={item.id}
+              title={item.label}
+              aria-label={item.label}
+              className={TAB_TRIGGER_CLASS}
+            >
+              <item.icon className="size-3.5" />
+            </TabsTrigger>
+          ))}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                title="自定义功能标签"
+                aria-label="自定义功能标签"
+                className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                <PlusIcon className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {RIGHT_TAB_ITEMS.map((item) => (
+                <DropdownMenuCheckboxItem
+                  key={item.id}
+                  checked={visibleTabs.includes(item.id)}
+                  onCheckedChange={() => togglePanelTab(item.id)}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  {item.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </TabsList>
 
         <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
@@ -160,14 +232,6 @@ function RightPanelBase({
           className="m-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden"
         >
           <BrowserPane target={previewTarget} />
-        </TabsContent>
-        {/* forceMount 保持 PTY 会话与输出流跨标签存活（同浏览器页签） */}
-        <TabsContent
-          value="terminal"
-          forceMount
-          className="m-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden"
-        >
-          <TerminalPane key={project?.id ?? "workspace"} project={project} />
         </TabsContent>
         <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <TaskList tasks={tasks} />
@@ -200,10 +264,11 @@ function RightPanelBase({
 export const RightPanel = memo(RightPanelBase);
 RightPanel.displayName = "RightPanel";
 
-/** 面板标签的选中态：只保留淡主题色背景与主题色文字，
- * 覆盖掉基础样式的边框、阴影和白底。 */
+/** 面板标签卡片：方形图标按钮（名称靠悬浮提示）；未选中为浅底，
+ *  选中只保留淡主题色背景与主题色图标，覆盖掉基础样式的边框、阴影和白底。 */
 const TAB_TRIGGER_CLASS = cn(
-  "h-7 gap-1.5 px-2.5 text-xs",
+  "size-6 flex-none justify-center gap-0 rounded-md px-0 py-0",
+  "bg-background/60 hover:bg-background",
   "data-[state=active]:border-transparent data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none",
   "dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-primary/20 dark:data-[state=active]:text-primary",
   "group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none",

@@ -26,8 +26,8 @@ import { wikiRoutes } from "./routes/wiki.js";
 const allowedOrigins = new Set(
   [
     process.env.OPENHARNESS_ALLOWED_ORIGIN,
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    "http://localhost:8089",
+    "http://127.0.0.1:8089",
     "http://tauri.localhost",
     "https://tauri.localhost",
     "tauri://localhost",

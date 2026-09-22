@@ -148,7 +148,7 @@ Prerequisites: Node.js ≥ 24, pnpm ≥ 11 (the repo pins `11.22.0`), Rust 1.88+
 
 ```bash
 pnpm install   # install deps and generate the Prisma client
-pnpm dev       # API (8878) + Vite (5173) + Tauri window, all at once
+pnpm dev       # API (8878) + Vite (8089) + Tauri window, all at once
 ```
 
 The database is created automatically under `.local-data/`; run `pnpm dev:api` / `pnpm dev:web` separately when you only need one part.

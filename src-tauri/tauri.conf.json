@@ -5,7 +5,7 @@
   "identifier": "com.openharness.desktop",
   "build": {
     "beforeDevCommand": "pnpm --filter web dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:8089",
     "beforeBuildCommand": "pnpm --filter web build",
     "frontendDist": "../web/dist"
   },

@@ -19,6 +19,7 @@ function unavailable(c: Context) {
 const createSchema = z.object({
   cwd: z.string().trim().max(500).optional(),
   title: z.string().trim().max(120).optional(),
+  projectId: z.string().trim().max(200).optional(),
   cols: z.number().int().min(10).max(500).optional(),
   rows: z.number().int().min(4).max(200).optional(),
 });

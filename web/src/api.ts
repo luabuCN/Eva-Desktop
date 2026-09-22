@@ -643,6 +643,8 @@ export interface TerminalInfo {
   pid: number;
   title: string;
   cwd: string;
+  /** 创建时所属项目 id；缺省为无项目的全局终端。 */
+  projectId?: string;
   cols: number;
   rows: number;
   createdAt: number;
@@ -658,6 +660,7 @@ export function listTerminals(): Promise<TerminalInfo[]> {
 export function createTerminal(input: {
   cwd?: string;
   title?: string;
+  projectId?: string;
   cols?: number;
   rows?: number;
 }): Promise<TerminalInfo> {

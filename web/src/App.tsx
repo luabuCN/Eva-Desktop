@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { PanelRightCloseIcon, PanelRightOpenIcon, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type SetStateAction } from "react";
+import { PanelRightCloseIcon, PanelRightOpenIcon, Search, SquareTerminalIcon } from "lucide-react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -38,6 +38,7 @@ import {
 } from "./api";
 import type { ChatUIMessage } from "./lib/chat-utils";
 import { ChatPane, type TurnOutcomeNote } from "./components/ChatPane";
+import { TerminalPane } from "./components/TerminalPane";
 import type { PreviewTarget } from "./components/BrowserPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
@@ -89,11 +90,17 @@ function loadReasoningEffort(): ReasoningEffort {
 const PERMISSION_MODE_KEY = "openharness.permissionMode";
 const AGENT_KEY = "openharness.agentId";
 const PROJECT_KEY = "openharness.projectId";
-// 标签栏（文件/浏览器/任务/变更/Git/工具结果/用量）七个标签的最小内容
-// 宽度实测约 524px，最小宽度取 530 保证全部可见、无需横向滚动——否则
-// "用量"会被裁在标签条右缘，看起来像面板丢了。
-const PANEL_WIDTH_MIN = 530;
-const PANEL_WIDTH_DEFAULT = 530;
+/** 终端面板开合状态的持久化 key：切项目/刷新/重启后恢复打开状态。 */
+const TERMINAL_OPEN_KEY = "openharness.terminalOpen";
+// 右侧面板默认宽度约为原始 530px 的一半；标签栏已改为单行图标卡片
+// （8 个 24px 图标 + 间距约 220px），265px 下仍能单行放下。面板可拖拽
+// 调宽，最小 220 保证图标不换行、内容区不至不可用。
+const PANEL_WIDTH_MIN = 220;
+const PANEL_WIDTH_DEFAULT = 265;
+/** 底部终端面板的默认/最小高度与上限（占窗口高度的比例）。 */
+const TERMINAL_HEIGHT_DEFAULT = 280;
+const TERMINAL_HEIGHT_MIN = 160;
+const TERMINAL_HEIGHT_MAX_RATIO = 0.7;
 
 /** Stable identity across renders so memoized RightPanel skips work on tabs
  * that do not read the transcript (files/tasks/changes/git). */
@@ -131,6 +138,15 @@ interface SessionViewProps {
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   panelOpen: boolean;
   onPanelOpenChange: (open: boolean) => void;
+  /** 底部终端面板的开合/挂载/高度：由 App 顶层持有——切换项目会切到
+   *  该项目下的会话导致 SessionView（key=session）重挂载，状态放这里
+   *  才能在切回来时保持"终端还开着、高度还是调过的"。 */
+  terminalOpen: boolean;
+  terminalMounted: boolean;
+  terminalHeight: number;
+  onTerminalOpenChange: Dispatch<SetStateAction<boolean>>;
+  onTerminalMountedChange: Dispatch<SetStateAction<boolean>>;
+  onTerminalHeightChange: Dispatch<SetStateAction<number>>;
   /** 打开全局搜索命令面板（顶栏搜索按钮，Ctrl+K 同效）。 */
   onOpenSearch: () => void;
   /** 聊天里的 wiki:// 链接点击后跳转知识库对应页面。 */
@@ -159,12 +175,25 @@ function SessionView({
   onReasoningEffortChange,
   panelOpen,
   onPanelOpenChange,
+  terminalOpen,
+  terminalMounted,
+  terminalHeight,
+  onTerminalOpenChange,
+  onTerminalMountedChange,
+  onTerminalHeightChange,
   onOpenSearch,
   onOpenWikiPage,
 }: SessionViewProps) {
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
+  const setTerminalOpen = onTerminalOpenChange;
+  const setTerminalMounted = onTerminalMountedChange;
+  const setTerminalHeight = onTerminalHeightChange;
+  // 底部终端面板：仅在已选择项目时入口可见（顶栏右侧终端按钮）。
+  // 首次打开后面板常驻 DOM、用 hidden 切换显隐：xterm 实例与 SSE 输出流
+  // 全程保活，收起再展开即刻恢复，不重连不闪屏。
+  const terminalPanelRef = useRef<HTMLDivElement>(null);
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const reasoningEffortRef = useRef(reasoningEffort);
   const permissionModeRef = useRef(permissionMode);
@@ -566,28 +595,44 @@ function SessionView({
     onPanelOpenChange(!panelOpen);
   }, [onPanelOpenChange, panelOpen]);
 
+  /** 右侧面板的宽度拖拽：与终端面板高度拖拽同套路——mousemove 期间
+   *  直接写 aside 的 DOM 宽度，绕过 React 重渲染（每次 mousemove 都
+   *  setState 会连带消息流 markdown 与文件树重排，往右拖时聊天区
+   *  逐帧变宽尤其卡）；松手时才把最终宽度落回 state。
+   *  浏览器标签里的 iframe 另需单独冻结宽度：iframe 跟随面板逐帧
+   *  resize 会让里面的整页网页同步重排重绘，哪怕不走 React 也卡——
+   *  拖拽期间把 iframe 宽度钉在起始值（内容零重排），松手后一次适配。 */
   const handleResizeStart = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = panelWidth;
+      const panel = event.currentTarget.nextElementSibling as HTMLElement | null;
+      const iframe = panel?.querySelector("iframe") ?? null;
+      if (iframe) iframe.style.width = `${iframe.getBoundingClientRect().width}px`;
+      let latest = startWidth;
 
-      const handleMove = (moveEvent: MouseEvent) => {
+      const clamp = (value: number) => {
         const maxWidth = Math.max(
           PANEL_WIDTH_MIN,
           Math.floor(window.innerWidth * 0.6),
         );
-        const next = Math.min(
-          Math.max(startWidth + (startX - moveEvent.clientX), PANEL_WIDTH_MIN),
+        return Math.min(
+          Math.max(startWidth + (startX - value), PANEL_WIDTH_MIN),
           maxWidth,
         );
-        setPanelWidth(next);
+      };
+      const handleMove = (moveEvent: MouseEvent) => {
+        latest = clamp(moveEvent.clientX);
+        if (panel) panel.style.width = `${latest}px`;
       };
       const handleUp = () => {
         window.removeEventListener("mousemove", handleMove);
         window.removeEventListener("mouseup", handleUp);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
+        if (iframe) iframe.style.width = "";
+        if (latest !== startWidth) setPanelWidth(latest);
       };
 
       document.body.style.cursor = "col-resize";
@@ -597,6 +642,48 @@ function SessionView({
     },
     [panelWidth],
   );
+
+  /** 底部终端面板的高度拖拽：上边缘向上拖变高，夹在最小高度与
+   * 窗口高度的 70% 之间。拖拽过程中直接写 DOM 高度——每次 mousemove
+   * 都 setState 会连带整个会话区（消息流 + 右面板）重渲染，肉眼可见
+   * 地掉帧；松手时才把最终高度落回 state。 */
+  const handleTerminalResizeStart = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = terminalHeight;
+      const panel = terminalPanelRef.current;
+      let latest = startHeight;
+
+      const clamp = (value: number) => {
+        const maxHeight = Math.max(
+          TERMINAL_HEIGHT_MIN,
+          Math.floor(window.innerHeight * TERMINAL_HEIGHT_MAX_RATIO),
+        );
+        return Math.min(Math.max(value, TERMINAL_HEIGHT_MIN), maxHeight);
+      };
+      const handleMove = (moveEvent: MouseEvent) => {
+        latest = clamp(startHeight + (startY - moveEvent.clientY));
+        if (panel) panel.style.height = `${latest}px`;
+      };
+      const handleUp = () => {
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        if (latest !== startHeight) setTerminalHeight(latest);
+      };
+
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
+    },
+    [terminalHeight],
+  );
+
+  // 当前选中的项目（未选择时为 undefined）：终端入口只在其存在时显示。
+  const project = projects.find((candidate) => candidate.id === projectId);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -623,19 +710,41 @@ function SessionView({
           </Button>
           <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={handleTogglePanel}
-          title={panelOpen ? "折叠面板" : "展开面板"}
-          aria-label={panelOpen ? "折叠面板" : "展开面板"}
-        >
-          {panelOpen ? (
-            <PanelRightCloseIcon className="size-4" />
-          ) : (
-            <PanelRightOpenIcon className="size-4" />
-          )}
-        </Button>
+        <div className="flex items-center gap-1">
+          {/* 终端开关：已选择项目时出现在右上角（窗口按钮左侧），
+              点击在底部展开/收起终端面板。 */}
+          {project ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => {
+                setTerminalMounted(true);
+                setTerminalOpen((open) => !open);
+              }}
+              title={terminalOpen ? "收起终端" : "打开终端"}
+              aria-label={terminalOpen ? "收起终端" : "打开终端"}
+              aria-pressed={terminalOpen}
+              className={cn(
+                terminalOpen && "bg-accent text-accent-foreground hover:bg-accent",
+              )}
+            >
+              <SquareTerminalIcon className="size-4" />
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleTogglePanel}
+            title={panelOpen ? "折叠面板" : "展开面板"}
+            aria-label={panelOpen ? "折叠面板" : "展开面板"}
+          >
+            {panelOpen ? (
+              <PanelRightCloseIcon className="size-4" />
+            ) : (
+              <PanelRightOpenIcon className="size-4" />
+            )}
+          </Button>
+        </div>
       </header>
       <div className="flex min-h-0 min-w-0 flex-1">
         <ChatPane
@@ -692,7 +801,7 @@ function SessionView({
             selectedToolId={selectedToolId}
             onToolSelect={setSelectedToolId}
             width={panelWidth}
-            project={projects.find((candidate) => candidate.id === projectId)}
+            project={project}
             sessionId={sessionId}
             busy={busy}
             contextWindow={contextWindow}
@@ -702,6 +811,31 @@ function SessionView({
           />
         ) : null}
       </div>
+      {/* 底部终端面板：顶栏右侧按钮开关，横跨聊天与右侧面板整行，
+          上边缘可拖拽调高度。首次打开后常驻（hidden 切换显隐），
+          PTY 会话活在 sidecar，输出流与渲染实例全程保活。 */}
+      {project && terminalMounted ? (
+        <div
+          ref={terminalPanelRef}
+          className={cn(
+            "flex shrink-0 flex-col overflow-hidden",
+            !terminalOpen && "hidden",
+          )}
+          style={{ height: terminalHeight }}
+        >
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            onMouseDown={handleTerminalResizeStart}
+            className="group relative flex h-1 shrink-0 cursor-row-resize items-center justify-center border-t"
+          >
+            <div className="h-0.5 w-10 rounded-full bg-border transition-colors group-hover:bg-primary/60 group-active:bg-primary" />
+          </div>
+          <div className="min-h-0 flex-1">
+            <TerminalPane key={project.id} project={project} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -747,6 +881,20 @@ export function App() {
     useState<GlobalSearchSettingsSection>("general");
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  // 终端面板的开合/挂载/高度放 App 层：切换项目会切到该项目下的会话，
+  // SessionView（key=session）随之重挂载，状态放它里面会在切回时丢失。
+  // 开合状态再持久化到 localStorage，刷新/重启应用后也恢复。
+  const [terminalOpen, setTerminalOpen] = useState(
+    () => localStorage.getItem(TERMINAL_OPEN_KEY) === "1",
+  );
+  const [terminalMounted, setTerminalMounted] = useState(
+    () => localStorage.getItem(TERMINAL_OPEN_KEY) === "1",
+  );
+  const [terminalHeight, setTerminalHeight] = useState(TERMINAL_HEIGHT_DEFAULT);
+
+  useEffect(() => {
+    localStorage.setItem(TERMINAL_OPEN_KEY, terminalOpen ? "1" : "0");
+  }, [terminalOpen]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -1133,6 +1281,12 @@ export function App() {
               onFinished={() => void refreshSessions()}
               panelOpen={panelOpen}
               onPanelOpenChange={setPanelOpen}
+              terminalOpen={terminalOpen}
+              terminalMounted={terminalMounted}
+              terminalHeight={terminalHeight}
+              onTerminalOpenChange={setTerminalOpen}
+              onTerminalMountedChange={setTerminalMounted}
+              onTerminalHeightChange={setTerminalHeight}
               onOpenSearch={() => setSearchOpen(true)}
               onOpenWikiPage={openWikiPage}
             />

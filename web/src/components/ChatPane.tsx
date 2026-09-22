@@ -249,21 +249,6 @@ export function ChatPane({
   );
   const activePlan = sortedPlans[0];
 
-  // 聊天里的链接（markdown/自动识别的 URL）默认会走系统浏览器打开；
-  // 拦截后送进内置浏览器面板，和预览行为保持一致。
-  const handleLinkClickCapture = useCallback(
-    (event: React.MouseEvent) => {
-      const anchor = (event.target as HTMLElement).closest?.("a[href]");
-      if (!anchor) return;
-      const href = anchor.getAttribute("href") ?? "";
-      if (!/^https?:\/\//i.test(href)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      onOpenLink?.(href);
-    },
-    [onOpenLink],
-  );
-
   // wiki:// 知识库引用链接：解析 scope 与 path 后跳转知识库页面。
   const handleWikiLink = useCallback(
     (href: string) => {
@@ -273,10 +258,10 @@ export function ChatPane({
     [onOpenWikiPage],
   );
 
-  // open-file:<encoded> 文件链接：解码出路径后交右侧面板预览。
+  // /open-file/<encoded> 文件链接：解码出路径后交右侧面板预览。
   const handleFileLink = useCallback(
     (href: string) => {
-      const encoded = href.slice("open-file:".length);
+      const encoded = href.slice("/open-file/".length);
       try {
         onOpenFile?.(decodeURIComponent(encoded));
       } catch {
@@ -284,6 +269,36 @@ export function ChatPane({
       }
     },
     [onOpenFile],
+  );
+
+  // 聊天里的链接（markdown/自动识别的 URL）默认会走系统浏览器打开；
+  // 拦截后送进内置浏览器面板，和预览行为保持一致。文件/wiki 链接在
+  // context 缺失时会退回普通 <a>（相对路径），这里兜底转对应的处理器，
+  // 避免相对路径被当成应用内导航打开 404。
+  const handleLinkClickCapture = useCallback(
+    (event: React.MouseEvent) => {
+      const anchor = (event.target as HTMLElement).closest?.("a[href]");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (/^https?:\/\//i.test(href)) {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenLink?.(href);
+        return;
+      }
+      if (href.startsWith("/open-file/")) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleFileLink(href);
+        return;
+      }
+      if (href.startsWith("/wiki/") || href.startsWith("wiki/")) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleWikiLink(href);
+      }
+    },
+    [handleFileLink, handleWikiLink, onOpenLink],
   );
 
   // —— 输入框「/技能」斜杠菜单 ——
@@ -544,7 +559,9 @@ export function ChatPane({
               />
             </PromptInputBody>
             <PromptInputFooter>
-              <PromptInputTools>
+              {/* 工具条可换行：窗口缩窄时按钮分多行排布，避免溢出被截断；
+                  发送按钮 self-end 固定在右下角。 */}
+              <PromptInputTools className="flex-wrap">
                 <PromptInputActionMenu>
                   <PromptInputActionMenuTrigger tooltip="添加附件" />
                   <PromptInputActionMenuContent>
@@ -582,7 +599,7 @@ export function ChatPane({
               <PromptInputSubmit
                 status={chat.status}
                 onStop={onStop ?? (() => void chat.stop())}
-                className="size-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
+                className="size-8 self-end rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
               />
             </PromptInputFooter>
           </PromptInput>

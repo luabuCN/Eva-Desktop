@@ -32,6 +32,9 @@ export interface TerminalSessionInfo {
   pid: number;
   title: string;
   cwd: string;
+  /** 创建时所属的项目 id；undefined 表示无项目时开的全局终端。
+   *  会话与项目的绑定在创建时固化，前端按它过滤出当前项目的终端。 */
+  projectId?: string;
   cols: number;
   rows: number;
   createdAt: number;
@@ -54,6 +57,7 @@ class TerminalSession {
     readonly cwd: string,
     private cols: number,
     private rows: number,
+    readonly projectId?: string,
   ) {
     pty.onData((data) => this.publish({ type: "output", data }));
     pty.onExit(({ exitCode }) => {
@@ -70,6 +74,7 @@ class TerminalSession {
       pid: this.pty.pid,
       title: this.title,
       cwd: this.cwd,
+      projectId: this.projectId,
       cols: this.cols,
       rows: this.rows,
       createdAt: this.createdAt,
@@ -197,6 +202,7 @@ export class TerminalHub {
   async create(input: {
     cwd?: string;
     title?: string;
+    projectId?: string;
     cols?: number;
     rows?: number;
   }): Promise<TerminalSessionInfo> {
@@ -222,6 +228,7 @@ export class TerminalHub {
       cwd,
       cols,
       rows,
+      input.projectId?.trim() || undefined,
     );
     this.sessions.set(session.id, session);
     return session.info();

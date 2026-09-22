@@ -368,9 +368,10 @@ const StreamdownLink = ({
       </button>
     );
   }
-  // 工作区文件链接：由 linkifyFilePaths 生成的 open-file:<encoded>，点击
+  // 工作区文件链接：由 linkifyFilePaths 生成的 /open-file/<encoded>，点击
   // 后右侧面板打开预览（office 走 file-viewer，其余走 /preview 静态路由）。
-  if (href && href.startsWith("open-file:") && openFile) {
+  // 相对路径形式：自定义协议会被 streamdown 的 sanitize 协议白名单剥掉。
+  if (href && href.startsWith("/open-file/") && openFile) {
     return (
       <button
         type="button"
@@ -412,7 +413,7 @@ const streamdownComponents = { a: StreamdownLink };
 /** 知识库跳转链接放行（/wiki/ 路径及旧格式），其余协议走默认安全变换。 */
 const streamdownUrlTransform: UrlTransform = (url, key, node) =>
   url.startsWith("/wiki/") || url.startsWith("wiki/") || url.startsWith("wiki://") ||
-  url.startsWith("open-file:")
+    url.startsWith("/open-file/")
     ? url
     : defaultUrlTransform(url, key, node);
 
