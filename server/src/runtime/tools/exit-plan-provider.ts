@@ -78,7 +78,7 @@ export class ExitPlanModeToolProvider implements ToolProvider {
           };
         }
         const mode = decision.action === "approve_full" ? "full" : "auto_edit";
-        run.escalateFromPlan?.(mode);
+        run.updatePermissionMode?.(mode);
         if (run.planGate) {
           run.planGate.approved = true;
           run.planGate.escalatedMode = mode;

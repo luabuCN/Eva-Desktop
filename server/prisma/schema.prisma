@@ -23,6 +23,7 @@ model Conversation {
   tasks       AgentTask[]
   changes     FileChange[]
   compaction  ConversationCompaction?
+  memories    MemoryNote[]
 }
 
 model StoredMessage {
@@ -87,13 +88,16 @@ model Project {
   archivedAt        DateTime?
   /// 项目级对话自动总结开关：null = 跟随全局设置，true/false = 强制开/关。
   wikiAutoIngest    Boolean?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  /// 项目级记忆自动生成开关：null = 跟随全局设置，true/false = 强制开/关。
+  memoryAutoGenerate Boolean?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
   conversations     Conversation[]
   runs              ThreadRun[]
   crons             CronJob[]
   mcpServers        McpServer[]
   commandRules      CommandRule[]
+  memories          MemoryNote[]
 }
 
 /// 用户配置的 MCP 服务器。projectId 为空表示全局级（所有项目可见），
@@ -166,6 +170,9 @@ model ThreadRun {
   modelId        String?
   status         String         @default("queued")
   error          String?
+  /** 触发本运行的用户消息 id（submit 与 regenerate 都是数组里最后一条
+   *  user 消息）；编辑重发据此把「这条消息之后」的文件修改圈出来。 */
+  triggerMessageId String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   startedAt      DateTime?
@@ -179,6 +186,7 @@ model ThreadRun {
 
   @@index([conversationId, status, createdAt])
   @@index([projectId, createdAt])
+  @@index([triggerMessageId])
 }
 
 model RunEvent {
@@ -464,4 +472,24 @@ model CronJob {
   updatedAt             DateTime  @updatedAt
 
   @@index([isActive])
+}
+
+/// 跨会话记忆笔记：对话回合结束后由快速模型自动沉淀（或手动创建），
+/// 同主题增量合并到已有笔记。triggerMessageId 是触发本次更新的最后
+/// 一条 assistant 消息 id，前端据此把「记忆更新」卡片渲染到该消息之后。
+/// projectId 为空表示默认工作区（无项目会话）的记忆。
+model MemoryNote {
+  id               String        @id @default(uuid())
+  projectId        String?
+  project          Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  conversationId   String?
+  conversation     Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  title            String
+  content          String
+  triggerMessageId String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([projectId, updatedAt])
+  @@index([conversationId])
 }

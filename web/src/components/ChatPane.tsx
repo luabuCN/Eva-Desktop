@@ -1,8 +1,8 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
-import { parseWikiHref } from "@/lib/chat-utils";
+import { parseWikiHref, splitCronContext } from "@/lib/chat-utils";
 import { friendlyErrorText, rawErrorDetail } from "@/lib/error-display";
 import { prepareAttachments } from "@/lib/attachments";
 import {
@@ -11,13 +11,27 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
   BookMarked,
+  BrainIcon,
   Check,
+  ChevronRightIcon,
   CircleAlertIcon,
   ImageIcon,
   InfoIcon,
   LoaderCircleIcon,
   SparklesIcon,
+  Undo2Icon,
 } from "lucide-react";
 import {
   Conversation,
@@ -47,6 +61,8 @@ import type {
   PlanApprovalInfo,
   ApprovalInfo,
   AskUserInfo,
+  FileChangeInfo,
+  MemoryNoteInfo,
   ModelSelection,
   PermissionMode,
   ProjectInfo,
@@ -55,7 +71,7 @@ import type {
   RunInfo,
   SkillInfo,
 } from "@/api";
-import { ingestConversationToWiki, listSkills } from "@/api";
+import { ingestConversationToWiki, listChangesSince, listSkills, revertChangesSince } from "@/api";
 import { MessageView } from "./MessageView";
 import { FileLinkContext, MessageLinkContext, WikiLinkContext } from "./ai-elements/message";
 import { ConversationMinimap } from "./ConversationMinimap";
@@ -78,7 +94,25 @@ export interface TurnOutcomeNote {
   message: string;
 }
 
-/** 「存入知识库」：把当前会话整体交给 wiki 总结队列（llm-wiki 的 Save to Wiki）。 */
+/** 编辑重发的撤回征询：该消息之后的回合修改过文件时弹出，等用户选择
+ *  「撤回修改并重发」「保留修改并重发」或取消（回到编辑态，草稿不丢）。 */
+interface EditRevertDialog {
+  messageId: string;
+  /** 编辑后的新文本，选择后用于截断重发。 */
+  text: string;
+  changes: FileChangeInfo[];
+  totals: { files: number; additions: number; deletions: number };
+}
+
+/** 定时任务注入的 <cron-context> 回合不是用户手输，编辑会破坏元数据块。 */
+function isCronTurn(message: ChatUIMessage): boolean {
+  return message.parts.some(
+    (part) => part.type === "text" && splitCronContext(part.text).context !== null,
+  );
+}
+
+/** 「存入知识库」：把当前会话整体交给 wiki 总结队列（llm-wiki 的 Save to Wiki）。
+ *  纯图标按钮，靠 title 提示用途；保存中/完成以图标状态反馈。 */
 function SaveToWikiButton({
   conversationId,
   projectId,
@@ -114,16 +148,17 @@ function SaveToWikiButton({
             ? "入队失败，请稍后重试"
             : "把这段对话总结进知识库"
       }
-      className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
     >
       {state === "saving" ? (
         <LoaderCircleIcon className="size-3.5 animate-spin" />
       ) : state === "done" ? (
         <Check className="size-3.5 text-emerald-500" />
+      ) : state === "error" ? (
+        <BookMarked className="size-3.5 text-destructive" />
       ) : (
         <BookMarked className="size-3.5" />
       )}
-      <span className="text-xs">存入知识库</span>
     </button>
   );
 }
@@ -175,6 +210,50 @@ export interface ChatPaneProps {
   onOpenWikiPage: (scopeId: string, path: string) => void;
   /** 停止按钮：运行与连接解耦后需要走服务端中止 API；缺省退回本地断流。 */
   onStop?: () => void;
+  /** 当前范围的记忆笔记（父组件轮询），按 triggerMessageId 挂到消息后。 */
+  memoryNotes?: MemoryNoteInfo[];
+  /** 「记忆更新」卡片点击后打开右侧面板记忆标签。 */
+  onOpenMemory?: () => void;
+}
+
+/** 回合末尾的记忆更新卡：标题行「N 条记忆更新」，展开列出本次沉淀/
+ *  合并的笔记标题，点击条目打开右侧面板的记忆标签。数据来自轮询而非
+ *  消息流，刷新/重进会话后由 triggerMessageId 重新挂回原位置。 */
+function MemoryUpdateCard({
+  notes,
+  onOpenMemory,
+}: {
+  notes: MemoryNoteInfo[];
+  onOpenMemory?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (notes.length === 0) return null;
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/memory w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <BrainIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">{notes.length} 条记忆更新</span>
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/memory:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="outline-none">
+        <div className="ml-3 space-y-0.5 border-l py-1 pl-3">
+          {notes.map((note) => (
+            <button
+              key={note.id}
+              type="button"
+              title="在记忆面板中查看"
+              onClick={() => onOpenMemory?.()}
+              className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/50"
+            >
+              <BrainIcon className="size-3.5 shrink-0 text-primary/70" />
+              <span className="min-w-0 flex-1 truncate text-foreground/90">{note.title}</span>
+            </button>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
 }
 
 export function ChatPane({
@@ -205,6 +284,8 @@ export function ChatPane({
   onOpenFile,
   onOpenWikiPage,
   onStop,
+  memoryNotes,
+  onOpenMemory,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -248,6 +329,104 @@ export function ChatPane({
     a.plan.createdAt.localeCompare(b.plan.createdAt),
   );
   const activePlan = sortedPlans[0];
+
+  // —— 已发送用户消息的编辑重发 ——
+  // 编辑中（editingId）气泡换成编辑器；确定后先查「这条消息之后」的文件
+  // 修改（服务端按运行关联圈窗口），有修改则弹对话框让用户选择是否撤回，
+  // 再截断历史并 regenerate。chat 对象每次渲染都是新引用，经 ref 取最新，
+  // 让传给 MessageView 的回调保持引用稳定（消息列表的 memo 依赖它）。
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  const [editingId, setEditingId] = useState<string>();
+  const [editDialog, setEditDialog] = useState<EditRevertDialog | null>(null);
+  // 预览/撤回请求在途：防连点，同时禁用对话框按钮。
+  const [editBusy, setEditBusy] = useState(false);
+  const editBusyRef = useRef(false);
+  const [editNote, setEditNote] = useState<string>();
+  useEffect(() => {
+    if (!editNote) return;
+    const timer = window.setTimeout(() => setEditNote(undefined), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [editNote]);
+
+  const markEditBusy = (busy: boolean) => {
+    editBusyRef.current = busy;
+    setEditBusy(busy);
+  };
+
+  /** 截断 + 重发：撤回（可选）→ 移除该消息之后的一切并替换文本 → regenerate。 */
+  const resendEdited = useCallback(
+    async (messageId: string, text: string, revert: boolean) => {
+      const chatNow = chatRef.current;
+      markEditBusy(true);
+      try {
+        if (revert) {
+          const result = await revertChangesSince(chatNow.id, messageId);
+          if (result.failures.length > 0) {
+            setEditNote(
+              `部分文件未能撤回：${result.failures
+                .map((failure) => `${failure.path}（${failure.error}）`)
+                .join("；")}`,
+            );
+          }
+        }
+        const index = chatNow.messages.findIndex((message) => message.id === messageId);
+        if (index === -1) return;
+        const original = chatNow.messages[index];
+        const edited: ChatUIMessage = {
+          ...original,
+          parts: [
+            ...(text.trim() ? [{ type: "text" as const, text }] : []),
+            ...original.parts.filter((part) => part.type !== "text"),
+          ],
+        };
+        setEditingId(undefined);
+        setEditDialog(null);
+        chatNow.clearError();
+        chatNow.setMessages([...chatNow.messages.slice(0, index), edited]);
+        void chatNow.regenerate().catch((cause) => {
+          setEditNote(
+            cause instanceof Error ? cause.message : "编辑后重新发送失败，请重试",
+          );
+        });
+      } finally {
+        markEditBusy(false);
+      }
+    },
+    [],
+  );
+
+  const handleEditStart = useCallback((messageId: string) => {
+    setEditingId(messageId);
+  }, []);
+
+  const handleEditCancel = useCallback(() => {
+    setEditingId(undefined);
+    setEditDialog(null);
+  }, []);
+
+  const handleEditSubmit = useCallback(
+    (messageId: string, text: string) => {
+      if (editBusyRef.current) return;
+      const chatNow = chatRef.current;
+      if (chatNow.status === "submitted" || chatNow.status === "streaming") return;
+      void (async () => {
+        markEditBusy(true);
+        // 预览失败按「无修改」处理：重发照常，错误由 regenerate 链路兜底。
+        const summary = await listChangesSince(chatNow.id, messageId).catch(
+          () => undefined,
+        );
+        markEditBusy(false);
+        const changes = summary?.changes ?? [];
+        if (summary && changes.length > 0) {
+          setEditDialog({ messageId, text, changes, totals: summary.totals });
+          return;
+        }
+        await resendEdited(messageId, text, false);
+      })();
+    },
+    [resendEdited],
+  );
 
   // wiki:// 知识库引用链接：解析 scope 与 path 后跳转知识库页面。
   const handleWikiLink = useCallback(
@@ -423,6 +602,19 @@ export function ChatPane({
     syncSlash(el);
   }, [syncSlash]);
 
+  // 记忆笔记按触发消息挂载：只有本会话生成的记忆才会在消息流里出卡
+  // （其他会话的笔记 triggerMessageId 匹配不到本会话消息，自然不显示）。
+  const memoryNotesByMessage = useMemo(() => {
+    const map = new Map<string, MemoryNoteInfo[]>();
+    for (const note of memoryNotes ?? []) {
+      if (!note.triggerMessageId) continue;
+      const list = map.get(note.triggerMessageId);
+      if (list) list.push(note);
+      else map.set(note.triggerMessageId, [note]);
+    }
+    return map;
+  }, [memoryNotes]);
+
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       <MessageLinkContext.Provider value={onOpenLink}>
@@ -444,13 +636,25 @@ export function ChatPane({
               </ConversationEmptyState>
             ) : (
               chat.messages.map((message) => (
-                <MessageView
-                  key={message.id}
-                  message={message}
-                  isStreaming={message.id === streamingMessageId}
-                  selectedToolId={selectedToolId}
-                  onToolSelect={onToolSelect}
-                />
+                <Fragment key={message.id}>
+                  <MessageView
+                    message={message}
+                    isStreaming={message.id === streamingMessageId}
+                    selectedToolId={selectedToolId}
+                    onToolSelect={onToolSelect}
+                    editEnabled={!busy && message.role === "user" && !isCronTurn(message)}
+                    isEditing={message.id === editingId}
+                    onEditStart={handleEditStart}
+                    onEditSubmit={handleEditSubmit}
+                    onEditCancel={handleEditCancel}
+                  />
+                  {message.role === "assistant" && memoryNotesByMessage.has(message.id) ? (
+                    <MemoryUpdateCard
+                      notes={memoryNotesByMessage.get(message.id) ?? []}
+                      onOpenMemory={onOpenMemory}
+                    />
+                  ) : null}
+                </Fragment>
               ))
             )}
             {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
@@ -545,6 +749,12 @@ export function ChatPane({
                   {attachmentError}
                 </p>
               ) : null}
+              {editNote ? (
+                <p className="flex w-full items-center gap-1.5 px-1 pb-1 text-xs text-amber-600 dark:text-amber-400">
+                  <InfoIcon className="size-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">{editNote}</span>
+                </p>
+              ) : null}
               <PromptInputAttachments />
               <AttachmentVisionHint acceptsImages={modelAcceptsImages} />
               <PromptInputTextarea
@@ -559,11 +769,14 @@ export function ChatPane({
               />
             </PromptInputBody>
             <PromptInputFooter>
-              {/* 工具条可换行：窗口缩窄时按钮分多行排布，避免溢出被截断；
-                  发送按钮 self-end 固定在右下角。 */}
+              {/* 参考 ZCode 的两端布局：左侧是附件与上下文选择，右侧是
+                  模型与发送；窗口缩窄时左组自动换行，右组固定不换行。 */}
               <PromptInputTools className="flex-wrap">
                 <PromptInputActionMenu>
-                  <PromptInputActionMenuTrigger tooltip="添加附件" />
+                  <PromptInputActionMenuTrigger
+                    tooltip="添加附件"
+                    className="size-7 rounded-md"
+                  />
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments />
                     <PromptInputActionMenuItem onSelect={openSlashFromMenu}>
@@ -572,22 +785,24 @@ export function ChatPane({
                     </PromptInputActionMenuItem>
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
-                <AgentSelector value={agentId} onChange={onAgentChange} />
-                <SaveToWikiButton
-                  conversationId={chat.id}
-                  projectId={projectId}
-                  disabled={chat.messages.length === 0}
+                <PermissionModeSelector
+                  value={permissionMode}
+                  onChange={onPermissionModeChange}
                 />
+                <AgentSelector value={agentId} onChange={onAgentChange} />
                 <ProjectSelector
                   projects={projects}
                   projectId={projectId}
                   onSelectProject={onProjectChange}
                   onChanged={onProjectCreated}
                 />
-                <PermissionModeSelector
-                  value={permissionMode}
-                  onChange={onPermissionModeChange}
+                <SaveToWikiButton
+                  conversationId={chat.id}
+                  projectId={projectId}
+                  disabled={chat.messages.length === 0}
                 />
+              </PromptInputTools>
+              <div className="flex shrink-0 items-center gap-1.5">
                 <ModelSelector
                   providers={providers}
                   value={displaySelection}
@@ -595,17 +810,90 @@ export function ChatPane({
                   effort={reasoningEffort}
                   onEffortChange={onReasoningEffortChange}
                 />
-              </PromptInputTools>
-              <PromptInputSubmit
-                status={chat.status}
-                onStop={onStop ?? (() => void chat.stop())}
-                className="size-8 self-end rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
-              />
+                <PromptInputSubmit
+                  status={chat.status}
+                  onStop={onStop ?? (() => void chat.stop())}
+                  className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
+                />
+              </div>
             </PromptInputFooter>
           </PromptInput>
           </div>
         </div>
       </div>
+
+      {/* 编辑重发的撤回征询：之后的回合改过文件时让用户决定是否恢复。 */}
+      <AlertDialog
+        open={editDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditDialog(null);
+        }}
+      >
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>撤回这条消息之后的文件修改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此消息之后的回合修改了 {editDialog?.totals.files ?? 0} 个文件。重新发送编辑后的消息前，可选择把这些文件恢复到修改前的内容；保留修改则文件维持现状。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border bg-muted/40 p-2">
+            {(editDialog?.changes ?? []).map((change) => (
+              <li key={change.id} className="flex min-w-0 items-center gap-2 text-xs">
+                <Badge
+                  variant={change.changeKind === "create" ? "default" : "secondary"}
+                  className="shrink-0 text-[10px]"
+                >
+                  {change.changeKind === "create"
+                    ? "新建"
+                    : change.changeKind === "delete"
+                      ? "删除"
+                      : "修改"}
+                </Badge>
+                <span
+                  className="min-w-0 flex-1 truncate font-mono"
+                  title={change.path}
+                >
+                  {change.path}
+                </span>
+                {change.additions > 0 ? (
+                  <span className="shrink-0 text-green-600">+{change.additions}</span>
+                ) : null}
+                {change.deletions > 0 ? (
+                  <span className="shrink-0 text-red-600">−{change.deletions}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={editBusy}>取消</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={editBusy}
+              onClick={() => {
+                if (editDialog) void resendEdited(editDialog.messageId, editDialog.text, false);
+              }}
+            >
+              {editBusy ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+              保留修改并重发
+            </Button>
+            <Button
+              type="button"
+              disabled={editBusy}
+              onClick={() => {
+                if (editDialog) void resendEdited(editDialog.messageId, editDialog.text, true);
+              }}
+            >
+              {editBusy ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : (
+                <Undo2Icon className="size-4" />
+              )}
+              撤回修改并重发
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

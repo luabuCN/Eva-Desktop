@@ -9,6 +9,7 @@ import {
   isReasoningEffort,
   listConversationRuns,
   listConversationTasks,
+  listMemoryNotes,
   listAgents,
   listProjects,
   listProviders,
@@ -16,6 +17,7 @@ import {
   answerAsk,
   decideApproval,
   decidePlan,
+  updateRunPermissionMode,
   deleteProject as apiDeleteProject,
   deleteSession as apiDeleteSession,
   isPermissionMode,
@@ -26,6 +28,7 @@ import {
   type AskUserInfo,
   type PlanApprovalAction,
   type PlanApprovalInfo,
+  type MemoryNoteInfo,
   type ModelSelection,
   type PermissionMode,
   type ProjectInfo,
@@ -203,6 +206,34 @@ function SessionView({
   const [tasks, setTasks] = useState<AgentTaskInfo[]>([]);
   const runsSignatureRef = useRef("");
 
+  // —— 跨会话记忆：轮询当前范围（项目/默认工作区）的记忆笔记 ——
+  // 服务端在回合结束后数秒才生成完记忆，除了常驻慢轮询外，回合结束
+  // （busy 落下）时再补几次延迟刷新，保证卡片及时出现。
+  const [memoryNotes, setMemoryNotes] = useState<MemoryNoteInfo[]>([]);
+  const memorySignatureRef = useRef("");
+  const refreshMemoryNotes = useCallback(() => {
+    void listMemoryNotes(projectIdRef.current)
+      .then((next) => {
+        const signature = next.map((note) => `${note.id}:${note.updatedAt}`).join("|");
+        if (signature === memorySignatureRef.current) return;
+        memorySignatureRef.current = signature;
+        setMemoryNotes(next);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    // 切项目/会话时换数据源：清空旧列表立即拉新范围
+    memorySignatureRef.current = "";
+    setMemoryNotes([]);
+    refreshMemoryNotes();
+  }, [projectId, sessionId, refreshMemoryNotes]);
+
+  useEffect(() => {
+    const timer = window.setInterval(refreshMemoryNotes, 4_000);
+    return () => window.clearInterval(timer);
+  }, [refreshMemoryNotes]);
+
   useEffect(() => {
     reasoningEffortRef.current = reasoningEffort;
   }, [reasoningEffort]);
@@ -368,6 +399,19 @@ function SessionView({
     return () => window.clearInterval(timer);
   }, [busy, refreshTasks]);
 
+  // 回合结束后记忆才在服务端生成完：busy 落下时补几次延迟刷新，
+  // 让「记忆更新」卡片尽快出现。
+  const memoryPrevBusyRef = useRef(false);
+  useEffect(() => {
+    const wasBusy = memoryPrevBusyRef.current;
+    memoryPrevBusyRef.current = busy;
+    if (!wasBusy || busy) return;
+    const timers = [3_000, 8_000, 15_000].map((delay) =>
+      window.setTimeout(refreshMemoryNotes, delay),
+    );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [busy, refreshMemoryNotes]);
+
   const pendingApprovals = runs.flatMap((run) =>
     run.approvals
       .filter((approval) => approval.status === "pending")
@@ -451,6 +495,48 @@ function SessionView({
     [],
   );
 
+  // 权限模式切换：本地状态照常更新（下一回合用它发请求）；若有进行中的
+  // 回合，额外调 API 让新模式就地重解析该运行的工具策略——后续工具调用
+  // 不再按回合开始时的快照弹卡，新模式下无需审批的挂起卡片也被自动放行。
+  // 计划模式例外：ExitPlanMode 与门控在回合开始时安装，中途切入无法真正
+  // 生效，只能留给下一回合。
+  const handlePermissionModeChange = useCallback(
+    (mode: PermissionMode) => {
+      onPermissionModeChange(mode);
+      if (mode === "plan") return;
+      const activeRuns = runs.filter(
+        (run) =>
+          run.status === "running" ||
+          run.status === "waiting_approval" ||
+          run.status === "queued",
+      );
+      for (const run of activeRuns) {
+        void updateRunPermissionMode(run.id, mode)
+          .then((result) => {
+            // 乐观收起被自动放行的审批卡（1 秒轮询回来前界面立即反应）；
+            // 运行状态本身由轮询接管刷新。
+            setRuns((current) =>
+              current.map((item) =>
+                item.id !== run.id
+                  ? item
+                  : {
+                      ...item,
+                      permissionMode: mode,
+                      approvals: item.approvals.filter(
+                        (approval) =>
+                          approval.status !== "pending" ||
+                          !result.approvedApprovalIds.includes(approval.id),
+                      ),
+                    },
+              ),
+            );
+          })
+          .catch(() => undefined);
+      }
+    },
+    [onPermissionModeChange, runs],
+  );
+
   // 提交后先本地把卡片置为已回答（1 秒轮询回来前界面立即收起），
   // 失败则回退为 pending，让用户重试。
   const handleAskAnswer = useCallback(
@@ -517,7 +603,11 @@ function SessionView({
   // 监听 data-oh:preview.open（生成 HTML / 启动开发服务器）：新通知到达时
   // 载入浏览器面板并自动切换。基线只在页面生命周期内首次接触该会话时登记
   // 一次，之后无论 SessionView 怎么重挂载，新通知都会正常触发。
+  // 基线必须等本会话历史快照就绪后再登记：快照是异步加载的，消息先空后满，
+  // 若在空数组阶段就把 baselined 置真，历史里的 preview.open 会被当成
+  // 新通知，一进会话就把面板翻到浏览器标签（默认应停留在"文件"）。
   useEffect(() => {
+    if (!snapshotReady) return;
     let state = previewSeen.get(sessionId);
     if (!state) {
       state = { seen: new Set(), baselined: false };
@@ -555,7 +645,7 @@ function SessionView({
         return;
       }
     }
-  }, [chat.messages, sessionId, panelOpen, onPanelOpenChange]);
+  }, [chat.messages, sessionId, panelOpen, onPanelOpenChange, snapshotReady]);
 
   // 聊天里的链接点击后送进内置浏览器面板（localhost 地址标记为服务器预览）
   const handleOpenLink = useCallback(
@@ -567,6 +657,12 @@ function SessionView({
     },
     [panelOpen, onPanelOpenChange],
   );
+
+  // 聊天里的「记忆更新」卡片点击后切换到右侧面板的记忆标签
+  const handleOpenMemory = useCallback(() => {
+    setTab("memory");
+    if (!panelOpen) onPanelOpenChange(true);
+  }, [panelOpen, onPanelOpenChange]);
 
   // 聊天里的文件链接（open-file:）：解析成绝对路径后送进浏览器面板；
   // office 扩展名由面板改用 file-viewer 渲染，其余类型 iframe 直接显示。
@@ -755,7 +851,7 @@ function SessionView({
           reasoningEffort={reasoningEffort}
           onReasoningEffortChange={onReasoningEffortChange}
           permissionMode={permissionMode}
-          onPermissionModeChange={onPermissionModeChange}
+          onPermissionModeChange={handlePermissionModeChange}
           agentId={agentId}
           onAgentChange={onAgentChange}
           selectedToolId={selectedToolId}
@@ -781,6 +877,8 @@ function SessionView({
           onOpenFile={handleOpenFile}
           onOpenWikiPage={onOpenWikiPage}
           onStop={handleStop}
+          memoryNotes={memoryNotes}
+          onOpenMemory={handleOpenMemory}
         />
         {panelOpen ? (
           <div
@@ -796,6 +894,7 @@ function SessionView({
           <RightPanel
             messages={tab === "tools" || tab === "usage" ? chat.messages : EMPTY_MESSAGES}
             tasks={tasks}
+            memoryNotes={memoryNotes}
             tab={tab}
             onTabChange={setTab}
             selectedToolId={selectedToolId}
@@ -808,6 +907,7 @@ function SessionView({
             previewTarget={previewTarget}
             onOpenLink={handleOpenLink}
             onOpenFile={handleOpenFile}
+            onMemoryRefresh={refreshMemoryNotes}
           />
         ) : null}
       </div>
@@ -1032,6 +1132,18 @@ export function App() {
     if (projectId) localStorage.setItem(PROJECT_KEY, projectId);
     else localStorage.removeItem(PROJECT_KEY);
   }, [projectId]);
+
+  // 切换会话时在渲染阶段同步撤销上一会话的快照状态：SessionView 按
+  // sessionId 重挂载，父组件的 effect（setSnapshotReady(false)）要到子组件
+  // 挂载 effect 跑完之后才执行，中间存在"新会话 id + 旧会话消息 + 就绪"
+  // 的一瞬，preview 基线会被旧消息污染。渲染期 setState 是 React 官方
+  // 推荐的"响应 props 变化调整 state"写法，提交前即生效。
+  const [lastSnapshotSession, setLastSnapshotSession] = useState(sessionId);
+  if (lastSnapshotSession !== sessionId) {
+    setLastSnapshotSession(sessionId);
+    setSnapshotReady(false);
+    setMessages([]);
+  }
 
   useEffect(() => {
     let cancelled = false;

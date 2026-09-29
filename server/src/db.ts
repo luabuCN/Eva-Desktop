@@ -271,6 +271,12 @@ export async function ensureSchema() {
     ALTER TABLE "ThreadRun" ADD COLUMN "permissionMode" TEXT NOT NULL DEFAULT 'confirm'
   `);
   await addColumnIfMissing(`
+    ALTER TABLE "ThreadRun" ADD COLUMN "triggerMessageId" TEXT
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "ThreadRun_triggerMessageId_idx" ON "ThreadRun" ("triggerMessageId")',
+  );
+  await addColumnIfMissing(`
     ALTER TABLE "Project" ADD COLUMN "toolPermissions" TEXT
   `);
   await addColumnIfMissing(`
@@ -524,6 +530,35 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "WikiIngestJob_conversationId_idx" ON "WikiIngestJob" ("conversationId")',
   );
+
+  // —— 跨会话记忆笔记（见 schema.prisma MemoryNote）——
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "MemoryNote" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "projectId" TEXT,
+      "conversationId" TEXT,
+      "title" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "triggerMessageId" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "MemoryNote_projectId_fkey"
+        FOREIGN KEY ("projectId") REFERENCES "Project"("id")
+        ON DELETE SET NULL ON UPDATE CASCADE,
+      CONSTRAINT "MemoryNote_conversationId_fkey"
+        FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
+        ON DELETE SET NULL ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "MemoryNote_projectId_updatedAt_idx" ON "MemoryNote" ("projectId", "updatedAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "MemoryNote_conversationId_idx" ON "MemoryNote" ("conversationId")',
+  );
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "memoryAutoGenerate" BOOLEAN
+  `);
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "ConversationCompaction" (

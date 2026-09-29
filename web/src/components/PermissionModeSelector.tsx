@@ -57,7 +57,10 @@ export function PermissionModeSelector({
           disabled={disabled}
           tooltip="权限模式：决定哪些操作需要确认"
           variant={value === "auto_edit" || value === "plan" ? "secondary" : "ghost"}
-          className={cn(value === "full" && "text-primary hover:text-primary")}
+          className={cn(
+            "h-7 gap-1 rounded-md px-2 text-xs",
+            value === "full" && "text-primary hover:text-primary",
+          )}
         >
           <CurrentIcon className="size-4" />
           <span>{current.label}</span>

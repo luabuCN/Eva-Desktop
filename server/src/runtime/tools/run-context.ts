@@ -39,8 +39,11 @@ export interface RunContextInit {
   planApprovals?: PlanApprovalBridge;
   /** plan 模式门控：整个运行（含委派）共享，ExitPlanMode 获批后放开。 */
   planGate?: PlanGate;
-  /** 计划获批后把整个运行的工具策略重解析为升级后的权限模式。 */
-  escalateFromPlan?: (mode: PermissionMode) => void;
+  /** 运行中把整个运行的工具策略重解析为新的权限模式（就地合并进
+   * toolPolicies，policyFor 闭包引用同一 map，即刻生效）。计划获批升级、
+   * 前端运行中切换模式都走这里；返回重解析后的策略表供调用方判断
+   * 已挂起的审批是否可以自动放行。 */
+  updatePermissionMode?: (mode: PermissionMode) => ToolPermissionMap;
   /** Delegate 工具的委派桥；子智能体上下文不带，委派不能再生委派。 */
   delegate?: DelegationBridge;
   /** bash(runInBackground=true) 的后台任务桥；注册表跨回合存活，子智能体

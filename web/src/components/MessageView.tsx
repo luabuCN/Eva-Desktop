@@ -43,6 +43,8 @@ import {
   MessageResponse,
   FileLinkContext,
 } from "@/components/ai-elements/message";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -73,6 +75,13 @@ interface MessageViewProps {
   isStreaming?: boolean;
   selectedToolId?: string;
   onToolSelect?: (id: string) => void;
+  /** 编辑已发送的用户消息：入口仅在空闲（editEnabled）且非定时任务回合
+   *  时由父组件放开；编辑中（isEditing）气泡替换为编辑器。 */
+  editEnabled?: boolean;
+  isEditing?: boolean;
+  onEditStart?: (messageId: string) => void;
+  onEditSubmit?: (messageId: string, text: string) => void;
+  onEditCancel?: () => void;
 }
 
 function MessageViewBase({
@@ -80,8 +89,14 @@ function MessageViewBase({
   isStreaming = false,
   selectedToolId,
   onToolSelect,
+  editEnabled = false,
+  isEditing = false,
+  onEditStart,
+  onEditSubmit,
+  onEditCancel,
 }: MessageViewProps) {
   const isUser = message.role === "user";
+  const editable = isUser && editEnabled && !!onEditStart && !isStreaming;
 
   // 连续的 reasoning / tool 调用归为一个“活动”块，整块折叠成一行
   // （“处理中 … / 已处理 · N 个步骤”）；其余 part 原样渲染。
@@ -149,24 +164,32 @@ function MessageViewBase({
       className="[content-visibility:auto] [contain-intrinsic-size:auto_720px]"
     >
       {isUser ? (
-        <MessageContent>
-          {message.parts.map((part, index) => {
-            if (part.type === "text") {
-              // 定时任务发起的回合：剥离 <cron-context> 原始块，换主题色徽标。
-              const { context, text } = splitCronContext(part.text);
-              return (
-                <Fragment key={index}>
-                  {context ? <CronOriginBadge context={context} /> : null}
-                  {text ? <p className="whitespace-pre-wrap">{text}</p> : null}
-                </Fragment>
-              );
-            }
-            if (part.type === "file") {
-              return <FilePartView key={index} part={part} />;
-            }
-            return null;
-          })}
-        </MessageContent>
+        isEditing ? (
+          <UserMessageEditor
+            message={message}
+            onSubmit={(text) => onEditSubmit?.(message.id, text)}
+            onCancel={() => onEditCancel?.()}
+          />
+        ) : (
+          <MessageContent>
+            {message.parts.map((part, index) => {
+              if (part.type === "text") {
+                // 定时任务发起的回合：剥离 <cron-context> 原始块，换主题色徽标。
+                const { context, text } = splitCronContext(part.text);
+                return (
+                  <Fragment key={index}>
+                    {context ? <CronOriginBadge context={context} /> : null}
+                    {text ? <p className="whitespace-pre-wrap">{text}</p> : null}
+                  </Fragment>
+                );
+              }
+              if (part.type === "file") {
+                return <FilePartView key={index} part={part} />;
+              }
+              return null;
+            })}
+          </MessageContent>
+        )
       ) : (
         blocks.map((block, index) =>
           block.kind === "activity" ? (
@@ -190,8 +213,16 @@ function MessageViewBase({
           ),
         )
       )}
-      {isUser || !isStreaming ? (
-        <MessageActions className={isUser ? "justify-end" : undefined}>
+      {isUser && !isEditing ? (
+        <MessageActions className="justify-end">
+          {editable ? (
+            <MessageAction
+              tooltip="编辑消息并重新发送"
+              onClick={() => onEditStart?.(message.id)}
+            >
+              <PencilIcon size={14} />
+            </MessageAction>
+          ) : null}
           <MessageAction
             tooltip="复制消息"
             onClick={() => void navigator.clipboard.writeText(messageText(message))}
@@ -207,6 +238,73 @@ function MessageViewBase({
 type ActivityItem =
   | { kind: "thinking"; part: ReasoningUIPart }
   | { kind: "tool"; part: ToolPart };
+
+/** 用户消息编辑器：编辑已发送的消息文本（附件保留原样），确定后由父组件
+ *  走截断 + 重发流程；Esc 取消，Ctrl/Cmd+Enter 确定。draft 留在本地，
+ *  撤回确认对话框选「取消」回到编辑态时内容不丢。 */
+function UserMessageEditor({
+  message,
+  onSubmit,
+  onCancel,
+}: {
+  message: ChatUIMessage;
+  onSubmit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(() => messageText(message));
+  const hasFiles = message.parts.some((part) => part.type === "file");
+  const canSubmit = draft.trim().length > 0 || hasFiles;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancel();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      if (canSubmit) onSubmit(draft);
+    }
+  };
+
+  return (
+    <div className="ml-auto flex w-full max-w-full flex-col gap-2 rounded-lg border border-border/70 bg-secondary/50 px-3 py-2.5">
+      <Textarea
+        value={draft}
+        autoFocus
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleKeyDown}
+        className="min-h-20 resize-none bg-background text-sm"
+      />
+      {hasFiles
+        ? message.parts
+            .map((part, index) => (part.type === "file" ? { part, index } : null))
+            .filter((entry): entry is { part: FileUIPart; index: number } => entry !== null)
+            .map(({ part, index }) => (
+              <span key={index} className="text-xs text-muted-foreground">
+                附件 {part.filename ?? part.mediaType} 保持不变
+              </span>
+            ))
+        : null}
+      <div className="flex items-center justify-end gap-2">
+        <span className="mr-auto text-[11px] text-muted-foreground">
+          Ctrl+Enter 确定 · Esc 取消 · 之后的回复将被移除并重新生成
+        </span>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          取消
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={!canSubmit}
+          onClick={() => onSubmit(draft)}
+        >
+          确定
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 /** 一个后台委派的聚合视图：start/progress/done/error 事件折叠成这一张卡。 */
 interface DelegationCardData {
@@ -1193,6 +1291,11 @@ export const MessageView = memo(
     prev.message === next.message &&
     prev.isStreaming === next.isStreaming &&
     prev.selectedToolId === next.selectedToolId &&
-    prev.onToolSelect === next.onToolSelect,
+    prev.onToolSelect === next.onToolSelect &&
+    prev.editEnabled === next.editEnabled &&
+    prev.isEditing === next.isEditing &&
+    prev.onEditStart === next.onEditStart &&
+    prev.onEditSubmit === next.onEditSubmit &&
+    prev.onEditCancel === next.onEditCancel,
 );
 MessageView.displayName = "MessageView";

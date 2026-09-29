@@ -60,10 +60,10 @@ export function ProjectSelector({
       <DialogTrigger asChild>
         <button
           type="button"
-          className="flex h-7 max-w-40 cursor-pointer items-center gap-1 rounded-full border bg-card/80 px-2 text-xs font-normal text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent"
+          className="flex h-7 max-w-40 cursor-pointer items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           title="选择项目工作区"
         >
-          <FolderOpenIcon className="size-3 shrink-0" />
+          <FolderOpenIcon className="size-3.5 shrink-0" />
           <span className="truncate">{selected?.name ?? "本地工作区"}</span>
         </button>
       </DialogTrigger>

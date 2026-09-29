@@ -1,7 +1,6 @@
-import { CheckIcon } from "lucide-react";
+import { BotIcon, CheckIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listAgents, type AgentInfo } from "@/api";
-import { Badge } from "@/components/ui/badge";
 import {
   Command,
   CommandEmpty,
@@ -50,17 +49,17 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
       }}
     >
       <DialogTrigger asChild>
-        <Badge
-          variant="outline"
+        <button
+          type="button"
+          title="选择 Agent"
           className={cn(
-            "h-7 cursor-pointer bg-card/80 shadow-sm backdrop-blur transition-colors hover:bg-accent",
+            "inline-flex h-7 max-w-32 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
             className,
           )}
         >
-          <span className="text-xs font-normal text-muted-foreground">
-            @{selected?.name ?? "Agent"}
-          </span>
-        </Badge>
+          <BotIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{selected?.name ?? "Agent"}</span>
+        </button>
       </DialogTrigger>
 
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">

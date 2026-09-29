@@ -80,12 +80,15 @@ async function requestApproval(
 /**
  * Wrap a tool's execute with the approval gate. Applied by the registry so
  * every provider (including future MCP tools that cannot embed approval
- * logic) gets identical gating from the resolved policy.
+ * logic) gets identical gating. The requireApproval decision is re-read from
+ * the live policy on every call instead of being frozen when the tool set is
+ * built, so mid-run permission-mode changes (mode switch from the UI, plan
+ * approval escalation) take effect on the next tool call immediately.
  */
-function wrapWithApproval(
+function wrapWithApprovalGate(
   toolName: string,
   tool: RuntimeTool,
-  approvals: ApprovalBridge,
+  run: RunContext,
 ): RuntimeTool {
   const inner = tool.execute;
   if (typeof inner !== "function") return tool;
@@ -94,7 +97,10 @@ function wrapWithApproval(
   const wrapped: RuntimeTool = Object.create(Object.getPrototypeOf(tool));
   Object.assign(wrapped, tool);
   wrapped.execute = async (input: any, context: any) => {
-    await requestApproval(approvals, toolName, input);
+    const policy = run.policyFor(toolName);
+    if (policy.requireApproval && run.approvals) {
+      await requestApproval(run.approvals, toolName, input);
+    }
     return inner(input, context);
   };
   return wrapped;
@@ -263,7 +269,7 @@ export class ToolProviderRegistry {
       // planGate 故意保留同一引用：计划获批后委派的门控同步放开。
       askUser: undefined,
       planApprovals: undefined,
-      escalateFromPlan: undefined,
+      updatePermissionMode: undefined,
       delegate: undefined,
       toolPolicies: this.policiesFor({
         mode: parent.permissionMode,
@@ -292,10 +298,7 @@ export class ToolProviderRegistry {
           tools[name] = wrapWithPlanGate(name, tool, run);
           continue;
         }
-        tools[name] =
-          policy.requireApproval && run.approvals
-            ? wrapWithApproval(name, tool, run.approvals)
-            : tool;
+        tools[name] = wrapWithApprovalGate(name, tool, run);
       }
     }
     return tools;

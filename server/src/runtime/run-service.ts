@@ -9,6 +9,8 @@ import {
   type AskUserQuestion,
   type PlanApprovalBridge,
   type PlanDecision,
+  type PermissionMode,
+  type ToolPermissionMap,
 } from "./tools/index.js";
 import { isCommandAllowed } from "./tools/command-rules.js";
 
@@ -29,6 +31,8 @@ interface ActiveRunHandle {
   approvals: InteractiveApprovalBridge;
   asks: AskUserBridge;
   plans: InteractivePlanBridge;
+  /** 运行中切换权限模式：重解析整个运行的工具策略，返回新策略表。 */
+  updatePermissionMode?: (mode: PermissionMode) => ToolPermissionMap;
 }
 
 function messageTitle(messages: ChatUIMessage[]): string | undefined {
@@ -43,6 +47,19 @@ function messageTitle(messages: ChatUIMessage[]): string | undefined {
     if (title) return title.slice(0, 80);
   }
   return undefined;
+}
+
+/** 触发本次运行的用户消息 id：submit 与 regenerate 的请求体里，它都是
+ *  数组中最后一条 user 消息。编辑重发流程用它把「某条消息之后」的运行
+ *  （及其文件修改）精确圈出来。 */
+function triggerMessageId(messages: ChatUIMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && typeof message.id === "string") {
+      return message.id;
+    }
+  }
+  return null;
 }
 
 class InteractiveApprovalBridge {
@@ -282,6 +299,7 @@ class ThreadRunService {
         agentId: input.agentId ?? null,
         providerId: input.selection?.providerId ?? null,
         modelId: input.selection?.modelId ?? null,
+        triggerMessageId: triggerMessageId(input.messages),
         status: "running",
         startedAt: new Date(),
       },
@@ -314,10 +332,31 @@ class ThreadRunService {
       asks,
       plans,
       waiting,
+      // runContext 在 registerAbortSource 之后才创建（需要 approvals/signal），
+      // 创建完毕再经此入口把模式更新器挂到句柄上，供 HTTP 路由调用。
+      setPermissionModeUpdater: (updater: (mode: PermissionMode) => ToolPermissionMap) => {
+        handle.updatePermissionMode = updater;
+      },
       cleanup: () => {
         this.activeRuns.delete(runId);
       },
     };
+  }
+
+  /**
+   * 运行中切换权限模式：对活跃运行就地重解析工具策略（下一次工具调用起
+   * 生效），并落库更新 ThreadRun.permissionMode。返回 live=false 表示运行
+   * 已不在内存（服务重启等），此时仅落库、无实时效果；live=true 时附带
+   * 新策略表，调用方可据此自动放行已挂起的审批。
+   */
+  async updateRunPermissionMode(runId: string, mode: PermissionMode) {
+    const handle = this.activeRuns.get(runId);
+    const policies = handle?.updatePermissionMode?.(mode);
+    await prisma.threadRun.update({
+      where: { id: runId },
+      data: { permissionMode: mode },
+    });
+    return { live: policies !== undefined, policies };
   }
 
   /**

@@ -129,7 +129,7 @@ export function ModelSelector({
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
-          className="flex h-8 max-w-56 items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 text-xs shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+          className="flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           title="模型与推理等级"
         >
           {effectiveProvider ? (

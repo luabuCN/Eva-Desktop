@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../db.js";
-import { runService } from "../runtime/run-service.js";
+import { ACTIVE_RUN_STATUSES, runService } from "../runtime/run-service.js";
 import { deriveAllowRule } from "../runtime/tools/command-rules.js";
 
 export const runRoutes = new Hono();
@@ -98,6 +98,45 @@ runRoutes.post("/conversations/:id/abort", async (c) => {
   }
   runService.abort(latest.id);
   return c.json({ ok: true, runId: latest.id });
+});
+
+/** 运行中切换权限模式：就地重解析整个运行的工具策略，下一次工具调用起
+ * 实时生效；新模式下不再需要审批的已挂起卡片自动批准（审批桥 500ms 轮询
+ * 到状态变化后恢复运行），仍需审批的（如 gitPush）保持挂起。计划模式除外：
+ * ExitPlanMode 工具与门控在回合开始时安装，中途切入无法真正生效，返回
+ * 400 让前端只把它留给下一回合。 */
+const permissionModeSchema = z.object({
+  mode: z.enum(["confirm", "auto_edit", "full"]),
+});
+
+runRoutes.post("/:id/permission-mode", async (c) => {
+  const input = permissionModeSchema.parse(await c.req.json());
+  const runId = c.req.param("id");
+  const run = await prisma.threadRun.findUnique({ where: { id: runId } });
+  if (!run) return c.json({ error: "Run not found" }, 404);
+  if (!ACTIVE_RUN_STATUSES.includes(run.status as (typeof ACTIVE_RUN_STATUSES)[number])) {
+    return c.json({ error: "Run is not active" }, 409);
+  }
+
+  const { live, policies } = await runService.updateRunPermissionMode(runId, input.mode);
+
+  const approvedApprovalIds: string[] = [];
+  if (live && policies) {
+    const pending = await prisma.toolApproval.findMany({
+      where: { runId, status: "pending" },
+    });
+    for (const approval of pending) {
+      const policy = policies[approval.toolName];
+      if (!policy || policy.requireApproval) continue;
+      await prisma.toolApproval.update({
+        where: { id: approval.id },
+        data: { status: "approved", decisionBy: "mode-switch", decidedAt: new Date() },
+      });
+      approvedApprovalIds.push(approval.id);
+    }
+  }
+
+  return c.json({ ok: true, live, approvedApprovalIds });
 });
 
 /** askUser 工具的答案回传：answers 与 questions 一一对应，null 表示该题被跳过

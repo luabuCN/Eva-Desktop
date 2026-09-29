@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   BarChart3Icon,
+  BrainIcon,
   CheckCircleIcon,
   CircleIcon,
   FileDiffIcon,
@@ -9,8 +10,10 @@ import {
   GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
+  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
+  Trash2Icon,
   WrenchIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -41,11 +44,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Streamdown } from "streamdown";
 import {
+  deleteMemoryNote,
+  getMemoryEnabled,
   listFiles,
   readFileContent,
+  setMemoryEnabled,
+  updateMemoryNote,
   type AgentTaskInfo,
   type FileEntry,
+  type MemoryNoteInfo,
   type ProjectInfo,
 } from "@/api";
 import {
@@ -62,7 +72,7 @@ import {
 import { friendlyErrorText } from "@/lib/error-display";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "browser" | "tasks" | "changes" | "git" | "tools" | "usage";
+export type RightTab = "files" | "browser" | "tasks" | "changes" | "git" | "tools" | "usage" | "memory";
 
 // —— 面板功能标签（卡片网格 + 可自定义） ——
 // 标签以「图标在上、文字在下」的卡片呈现，网格一行最多 4 个、超出换行；
@@ -75,6 +85,7 @@ const RIGHT_TAB_ITEMS: Array<{ id: RightTab; label: string; icon: LucideIcon }> 
   { id: "git", label: "Git", icon: GitBranchIcon },
   { id: "tools", label: "工具结果", icon: WrenchIcon },
   { id: "usage", label: "用量", icon: BarChart3Icon },
+  { id: "memory", label: "记忆", icon: BrainIcon },
 ];
 const ALL_RIGHT_TABS: RightTab[] = RIGHT_TAB_ITEMS.map((item) => item.id);
 const PANEL_TAB_STORAGE_KEY = "openharness.panel-tabs";
@@ -98,6 +109,7 @@ function loadVisiblePanelTabs(): RightTab[] {
 export interface RightPanelProps {
   messages: ChatUIMessage[];
   tasks: AgentTaskInfo[];
+  memoryNotes: MemoryNoteInfo[];
   tab: RightTab;
   onTabChange: (tab: RightTab) => void;
   selectedToolId?: string;
@@ -114,11 +126,14 @@ export interface RightPanelProps {
   onOpenLink?: (url: string) => void;
   /** 文件树里点击 office/图片等二进制文件时改在预览面板打开。 */
   onOpenFile?: (filePath: string) => void;
+  /** 记忆笔记增删改后请求父组件立即刷新轮询数据。 */
+  onMemoryRefresh?: () => void;
 }
 
 function RightPanelBase({
   messages,
   tasks,
+  memoryNotes,
   tab,
   onTabChange,
   selectedToolId,
@@ -131,6 +146,7 @@ function RightPanelBase({
   previewTarget,
   onOpenLink,
   onOpenFile,
+  onMemoryRefresh,
 }: RightPanelProps) {
   // 标签显隐：用户通过「+」卡片菜单增删，localStorage 跨会话记忆
   const [visibleTabs, setVisibleTabs] = useState<RightTab[]>(loadVisiblePanelTabs);
@@ -252,6 +268,13 @@ function RightPanelBase({
         </TabsContent>
         <TabsContent value="usage" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <UsageView messages={messages} contextWindow={contextWindow} />
+        </TabsContent>
+        <TabsContent value="memory" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
+          <MemoryList
+            notes={memoryNotes}
+            projectId={project?.id ?? null}
+            onRefresh={onMemoryRefresh}
+          />
         </TabsContent>
       </Tabs>
     </aside>
@@ -590,6 +613,171 @@ function DependencyTags({ label, ids }: { label: string; ids: string[] }) {
           #{id}
         </Badge>
       ))}
+    </div>
+  );
+}
+
+/** 一周内的相对时间，更早的落到日期。 */
+function formatNoteTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  return date.toLocaleDateString();
+}
+
+/** 跨会话记忆列表：对话回合结束自动沉淀的笔记，可展开阅读、编辑、删除。 */
+function MemoryList({
+  notes,
+  projectId,
+  onRefresh,
+}: {
+  notes: MemoryNoteInfo[];
+  projectId?: string | null;
+  onRefresh?: () => void;
+}) {
+  const [autoEnabled, setAutoEnabled] = useState<boolean | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getMemoryEnabled(projectId)
+      .then((enabled) => {
+        if (!cancelled) setAutoEnabled(enabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const toggleAuto = useCallback(
+    (enabled: boolean) => {
+      setAutoEnabled(enabled);
+      void setMemoryEnabled(enabled, projectId).catch(() => undefined);
+    },
+    [projectId],
+  );
+
+  const startEdit = useCallback((note: MemoryNoteInfo) => {
+    setEditingId(note.id);
+    setDraft(note.content);
+  }, []);
+
+  const saveEdit = useCallback(
+    (id: string) => {
+      void updateMemoryNote(id, { content: draft })
+        .then(() => {
+          setEditingId(null);
+          onRefresh?.();
+        })
+        .catch(() => undefined);
+    },
+    [draft, onRefresh],
+  );
+
+  const remove = useCallback(
+    (id: string) => {
+      void deleteMemoryNote(id)
+        .then(() => onRefresh?.())
+        .catch(() => undefined);
+    },
+    [onRefresh],
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>共 {notes.length} 条</span>
+        <label className="flex items-center gap-1.5">
+          <span>自动生成</span>
+          <Switch
+            checked={autoEnabled ?? true}
+            disabled={autoEnabled === null}
+            onCheckedChange={toggleAuto}
+            aria-label="自动生成记忆"
+          />
+        </label>
+      </div>
+      {notes.length === 0 ? (
+        <EmptyNote text="还没有记忆。对话回合结束后会自动沉淀值得记住的内容。" />
+      ) : (
+        <ul className="space-y-2">
+          {notes.map((note) => {
+            const open = openId === note.id;
+            const editing = editingId === note.id;
+            return (
+              <li key={note.id} className="rounded-md border p-2.5">
+                <div className="flex items-start gap-2">
+                  <BrainIcon className="mt-0.5 size-3.5 shrink-0 text-primary/70" />
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => setOpenId(open ? null : note.id)}
+                  >
+                    <p className="truncate text-sm font-medium">{note.title}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {formatNoteTime(note.updatedAt)}
+                    </p>
+                  </button>
+                  {editing ? null : (
+                    <button
+                      type="button"
+                      title="编辑"
+                      aria-label="编辑记忆"
+                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      onClick={() => startEdit(note)}
+                    >
+                      <PencilIcon className="size-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    title="删除"
+                    aria-label="删除记忆"
+                    className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    onClick={() => remove(note.id)}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                </div>
+                {open ? (
+                  editing ? (
+                    <div className="mt-2 space-y-1.5">
+                      <textarea
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        rows={6}
+                        className="w-full resize-y rounded-md border bg-background p-2 font-mono text-xs"
+                      />
+                      <div className="flex justify-end gap-1.5">
+                        <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                          取消
+                        </Button>
+                        <Button size="sm" onClick={() => saveEdit(note.id)}>
+                          保存
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 border-t pt-2 text-xs">
+                      <Streamdown>{note.content}</Streamdown>
+                    </div>
+                  )
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

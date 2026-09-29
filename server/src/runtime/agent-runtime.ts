@@ -32,6 +32,8 @@ import { loadProjectDocs, projectDocsSection } from "./project-docs.js";
 import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
 import { isAutoIngestEnabledFor, wikiQueue } from "../wiki/wiki-queue.js";
+import { generateMemoryForTurn } from "../memory/memory-llm.js";
+import { isMemoryEnabledFor, recentMemorySection } from "../memory/memory-service.js";
 import {
   parseToolPermissionMap,
   toolProviderRegistry,
@@ -66,6 +68,15 @@ function lastRunHasText(messages: ChatUIMessage[]): boolean {
     );
   }
   return false;
+}
+
+/** 最后一条助手消息的 id（记忆更新卡片的挂载点；无助手消息时为 null）。 */
+function lastAssistantMessageId(messages: ChatUIMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant") return message.id;
+  }
+  return null;
 }
 
 async function projectDefaults(projectId?: string) {
@@ -164,27 +175,30 @@ class AgentRuntimeService {
         planGate: permissionMode === "plan" ? { approved: false } : undefined,
         signal: activeRun.signal,
       });
-      // 计划获批后把整个运行的策略就地重解析为升级后的权限模式
-      // （policyFor 闭包引用同一 map，就地合并即可生效）。委派在获批
-      // 之后派生的会直接按新模式解析；之前派生的靠共享门控放开，其
-      // 审批要求保持派生时的安全默认。
-      if (permissionMode === "plan") {
-        runContext.escalateFromPlan = (mode) => {
-          Object.assign(
-            runContext.toolPolicies,
-            toolProviderRegistry.policiesFor({
-              mode,
-              readOnly: runContext.readOnly,
-              overrides: runContext.permissionOverrides,
-              disabledTools: runContext.disabledTools,
-            }),
-          );
-          runContext.permissionMode = mode;
-        };
-      }
+      // 运行中把整个运行的策略就地重解析为新的权限模式（policyFor 闭包
+      // 引用同一 map，就地合并即可生效）。两个入口：计划获批升级（仅 plan
+      // 模式安装了 ExitPlanMode，但更新器对所有模式一致）、前端运行中切换
+      // 权限模式（经 runService 挂到活跃运行句柄上）。委派在切换之后派生
+      // 的会直接按新模式解析；之前派生的靠共享门控/既有策略继续。
+      runContext.updatePermissionMode = (mode) => {
+        const policies = toolProviderRegistry.policiesFor({
+          mode,
+          readOnly: runContext.readOnly,
+          overrides: runContext.permissionOverrides,
+          disabledTools: runContext.disabledTools,
+        });
+        Object.assign(runContext.toolPolicies, policies);
+        runContext.permissionMode = mode;
+        return policies;
+      };
+      activeRun.setPermissionModeUpdater(runContext.updatePermissionMode);
       // 项目指令文件（AGENTS.md / CLAUDE.md / EVA.md）：每回合读取一次，
       // 注入主智能体系统提示，并随委派传给子智能体，保证项目约定全链路生效。
       const projectDocs = await loadProjectDocs(workspacePath);
+
+      // 跨会话记忆：最近若干条记忆笔记注入系统提示，agent 天然带着
+      // 此前对话沉淀的背景知识工作；无记忆时为空串、不注入。
+      const memorySection = await recentMemorySection(context.projectId).catch(() => "");
 
       // 委派中心：Delegate 工具的后端。定义来自子智能体目录（内置 + 自定义），
       // 每个运行一个实例；运行结束（完成或中止）时停掉所有仍在跑的委派。
@@ -247,6 +261,7 @@ class AgentRuntimeService {
             : undefined,
           planModeInstructions,
           projectDocs ? projectDocsSection(projectDocs) : undefined,
+          memorySection || undefined,
         ]
           .filter((part): part is string => part !== undefined)
           .join("\n\n"),
@@ -565,6 +580,25 @@ class AgentRuntimeService {
                 });
               } catch (error) {
                 console.error("wiki auto ingest enqueue failed", error);
+              }
+            })();
+            // 跨会话记忆：同门槛下用快速模型把本回合沉淀/合并成一条记忆
+            // 笔记（后台执行、失败只记日志）。triggerMessageId = 本回合
+            // 最后一条助手消息 id，前端据此把「记忆更新」卡片挂到该消息后。
+            void (async () => {
+              try {
+                if (!(await isMemoryEnabledFor(context.projectId))) return;
+                await generateMemoryForTurn({
+                  conversationId: context.conversationId,
+                  projectId: context.projectId ?? null,
+                  fromSeq: messages.length,
+                  toSeq: finalMessages.length,
+                  triggerMessageId: lastAssistantMessageId(
+                    finalMessages as ChatUIMessage[],
+                  ),
+                });
+              } catch (error) {
+                console.error("memory generate failed", error);
               }
             })();
           }

@@ -222,6 +222,8 @@ export interface RunInfo {
   projectId?: string | null;
   agentId?: string | null;
   thinkingMode: string;
+  /** 本回合发起时的权限模式；运行中被切换时服务端会就地更新此字段。 */
+  permissionMode?: string;
   providerId?: string | null;
   modelId?: string | null;
   status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "aborted";
@@ -602,6 +604,63 @@ export function listConversationTasks(conversationId: string): Promise<AgentTask
     .then((data) => data.tasks);
 }
 
+// —— 跨会话记忆（对话回合结束自动沉淀的笔记） ——
+
+export interface MemoryNoteInfo {
+  id: string;
+  projectId: string | null;
+  conversationId: string | null;
+  title: string;
+  content: string;
+  /** 触发本次更新的最后一条助手消息 id（聊天内卡片挂载点）。 */
+  triggerMessageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listMemoryNotes(
+  projectId?: string | null,
+  conversationId?: string | null,
+): Promise<MemoryNoteInfo[]> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("projectId", projectId);
+  if (conversationId) params.set("conversationId", conversationId);
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  return apiFetch<{ notes: MemoryNoteInfo[] }>(`/api/memory${query}`)
+    .then((data) => data.notes);
+}
+
+export function updateMemoryNote(
+  id: string,
+  input: { title?: string; content?: string },
+): Promise<MemoryNoteInfo> {
+  return apiFetch<{ note: MemoryNoteInfo }>(`/api/memory/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  }).then((data) => data.note);
+}
+
+export function deleteMemoryNote(id: string): Promise<void> {
+  return apiFetch(`/api/memory/${id}`, { method: "DELETE" }).then(() => undefined);
+}
+
+export function getMemoryEnabled(projectId?: string | null): Promise<boolean> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  return apiFetch<{ enabled: boolean }>(`/api/memory/enabled${query}`)
+    .then((data) => data.enabled);
+}
+
+/** projectId 省略/为空时写全局开关，否则写项目级覆盖。 */
+export function setMemoryEnabled(
+  enabled: boolean,
+  projectId?: string | null,
+): Promise<void> {
+  return apiFetch("/api/memory/enabled", {
+    method: "PUT",
+    body: JSON.stringify({ enabled, projectId: projectId || null }),
+  }).then(() => undefined);
+}
+
 export type ApprovalAction =
   | "approve"
   | "approve_always"
@@ -618,6 +677,18 @@ export function decideApproval(
     method: "POST",
     body: JSON.stringify({ action }),
   }).then(() => undefined);
+}
+
+/** 运行中切换权限模式：服务端就地重解析该运行的工具策略（下一次工具
+ * 调用起实时生效），并自动批准新模式下不再需要审批的挂起卡片。 */
+export function updateRunPermissionMode(
+  runId: string,
+  mode: Exclude<PermissionMode, "plan">,
+): Promise<{ ok: true; live: boolean; approvedApprovalIds: string[] }> {
+  return apiFetch(`/api/runs/${runId}/permission-mode`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export interface WorkspaceSettingInfo {
@@ -791,6 +862,26 @@ export function revertConversationChanges(conversationId: string): Promise<Rever
   return apiFetch<RevertResult>("/api/changes/revert-conversation", {
     method: "POST",
     body: JSON.stringify({ conversationId }),
+  });
+}
+
+/** 编辑重发流程：查询「某条用户消息之后」的回合修改过的文件（窗口预览）。 */
+export function listChangesSince(
+  conversationId: string,
+  messageId: string,
+): Promise<ChangesSummary> {
+  const query = new URLSearchParams({ conversationId, messageId });
+  return apiFetch<ChangesSummary>(`/api/changes/since?${query.toString()}`);
+}
+
+/** 编辑重发流程：把该消息之后回合修改过的文件恢复到修改前内容。 */
+export function revertChangesSince(
+  conversationId: string,
+  messageId: string,
+): Promise<RevertResult> {
+  return apiFetch<RevertResult>("/api/changes/revert-since", {
+    method: "POST",
+    body: JSON.stringify({ conversationId, messageId }),
   });
 }
 
