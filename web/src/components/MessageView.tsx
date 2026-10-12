@@ -97,6 +97,10 @@ function MessageViewBase({
 }: MessageViewProps) {
   const isUser = message.role === "user";
   const editable = isUser && editEnabled && !!onEditStart && !isStreaming;
+  // 正文是否已开始输出：决定头部头像旁是否还挂着「思考中…」。
+  const textStarted = message.parts.some(
+    (part) => part.type === "text" && part.text.length > 0,
+  );
 
   // 连续的 reasoning / tool 调用归为一个“活动”块，整块折叠成一行
   // （“处理中 … / 已处理 · N 个步骤”）；其余 part 原样渲染。
@@ -191,7 +195,18 @@ function MessageViewBase({
           </MessageContent>
         )
       ) : (
-        blocks.map((block, index) =>
+        <>
+          {/* 头部 AI 头像行：名称常驻；流式且正文尚未开始输出时，追加「思考中…」微光文字。 */}
+          <div className="flex items-center gap-2.5">
+            <AssistantAvatar />
+            <span className="text-sm font-medium text-foreground">Eva AI Agent</span>
+            {isStreaming && !textStarted ? (
+              <Shimmer as="span" duration={1.6} className="text-xs text-muted-foreground">
+                思考中…
+              </Shimmer>
+            ) : null}
+          </div>
+          {blocks.map((block, index) =>
           block.kind === "activity" ? (
             block.items.length === 1 ? (
               renderAssistantPart(
@@ -211,7 +226,8 @@ function MessageViewBase({
           ) : (
             renderAssistantPart(block.part, index, false)
           ),
-        )
+          )}
+        </>
       )}
       {isUser && !isEditing ? (
         <MessageActions className="justify-end">
@@ -589,6 +605,18 @@ function groupParts(parts: RenderablePart[]): AssistantBlock[] {
   flush();
   return blocks;
 }
+
+/** 助手消息头部的 AI 头像（蓝色 bloub 动图）：流式进行中与已完成均展示。 */
+const AssistantAvatar = memo(function AssistantAvatar() {
+  return (
+    <img
+      src={`${import.meta.env.BASE_URL}bloub-cercle-attentif-bleu.gif`}
+      alt="AI"
+      draggable={false}
+      className="size-6 shrink-0 select-none object-contain"
+    />
+  );
+});
 
 /** Streaming updates replace the message object each chunk; unchanged parts
  * keep their object identity, so memoized part views skip everything except

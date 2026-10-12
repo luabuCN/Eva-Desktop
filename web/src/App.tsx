@@ -40,7 +40,7 @@ import {
   type AgentInfo,
 } from "./api";
 import type { ChatUIMessage } from "./lib/chat-utils";
-import { ChatPane, type TurnOutcomeNote } from "./components/ChatPane";
+import { ChatPane, type ChatInputApi, type FileMention, type TurnOutcomeNote } from "./components/ChatPane";
 import { TerminalPane } from "./components/TerminalPane";
 import type { PreviewTarget } from "./components/BrowserPane";
 import { defaultModelSelection } from "./components/ModelSelector";
@@ -664,6 +664,13 @@ function SessionView({
     if (!panelOpen) onPanelOpenChange(true);
   }, [panelOpen, onPanelOpenChange]);
 
+  // 右侧文件面板「添加到对话」：经命令式 ref 写入聊天输入框的引用芯片，
+  // 不提升到 SessionView 状态（避免每次添加都重渲染整棵会话树）。
+  const chatInputApiRef = useRef<ChatInputApi | null>(null);
+  const handleAddFileToChat = useCallback((mention: FileMention) => {
+    chatInputApiRef.current?.addFileMention(mention);
+  }, []);
+
   // 聊天里的文件链接（open-file:）：解析成绝对路径后送进浏览器面板；
   // office 扩展名由面板改用 file-viewer 渲染，其余类型 iframe 直接显示。
   const handleOpenFile = useCallback(
@@ -879,6 +886,7 @@ function SessionView({
           onStop={handleStop}
           memoryNotes={memoryNotes}
           onOpenMemory={handleOpenMemory}
+          inputApiRef={chatInputApiRef}
         />
         {panelOpen ? (
           <div
@@ -907,6 +915,7 @@ function SessionView({
             previewTarget={previewTarget}
             onOpenLink={handleOpenLink}
             onOpenFile={handleOpenFile}
+            onAddFileToChat={handleAddFileToChat}
             onMemoryRefresh={refreshMemoryNotes}
           />
         ) : null}

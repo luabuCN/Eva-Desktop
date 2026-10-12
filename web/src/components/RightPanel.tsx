@@ -4,12 +4,15 @@ import {
   BrainIcon,
   CheckCircleIcon,
   CircleIcon,
+  EyeIcon,
+  CodeIcon,
   FileDiffIcon,
   FolderOpenIcon,
   GitBranchIcon,
   GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
+  MessageSquarePlusIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -22,9 +25,14 @@ import { CodeBlock } from "@/components/ai-elements/code-block";
 import { DiffCard } from "@/components/ai-elements/diff-block";
 import {
   FileTree,
+  FileTreeActions,
   FileTreeFile,
   FileTreeFolder,
+  FileTreeIcon,
+  FileTreeName,
 } from "@/components/ai-elements/file-tree";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
+import type { FileMention } from "@/components/ChatPane";
 import { getStatusBadge, ToolInput, stringifyToolOutput } from "@/components/ai-elements/tool";
 import {
   extractWebFetchOutput,
@@ -126,6 +134,8 @@ export interface RightPanelProps {
   onOpenLink?: (url: string) => void;
   /** 文件树里点击 office/图片等二进制文件时改在预览面板打开。 */
   onOpenFile?: (filePath: string) => void;
+  /** 文件树/文件内容视图里「添加到对话」：把文件或选段引用写进聊天输入框。 */
+  onAddFileToChat?: (mention: FileMention) => void;
   /** 记忆笔记增删改后请求父组件立即刷新轮询数据。 */
   onMemoryRefresh?: () => void;
 }
@@ -146,6 +156,7 @@ function RightPanelBase({
   previewTarget,
   onOpenLink,
   onOpenFile,
+  onAddFileToChat,
   onMemoryRefresh,
 }: RightPanelProps) {
   // 标签显隐：用户通过「+」卡片菜单增删，localStorage 跨会话记忆
@@ -237,6 +248,7 @@ function RightPanelBase({
             key={project?.id ?? "workspace"}
             project={project}
             onOpenFile={onOpenFile}
+            onAddToChat={onAddFileToChat}
           />
         </TabsContent>
         {/* forceMount 保持 iframe 与导航历史跨标签存活；Radix 对 forceMount
@@ -318,9 +330,11 @@ function fileExtension(filePath: string): string {
 function FileBrowser({
   project,
   onOpenFile,
+  onAddToChat,
 }: {
   project?: ProjectInfo | null;
   onOpenFile?: (filePath: string) => void;
+  onAddToChat?: (mention: FileMention) => void;
 }) {
   const rootPath = project?.rootPath ?? "";
   const rootLabel =
@@ -405,7 +419,28 @@ function FileBrowser({
           {expanded.has(path) ? renderDir(path) : null}
         </FileTreeFolder>
       ) : (
-        <FileTreeFile key={path} path={path} name={entry.name} />
+        // 文件行尾部悬浮「添加到对话」：对文件树里所有可打开的文件可用，
+        // 点击只加引用不触发行选中（FileTreeActions 内部已阻止冒泡）。
+        <FileTreeFile key={path} path={path} name={entry.name} className="group/file">
+          <span className="size-4 shrink-0" />
+          <FileTreeIcon>
+            <FileTypeIcon name={entry.name} className="size-4" />
+          </FileTreeIcon>
+          <FileTreeName className="min-w-0 flex-1">{entry.name}</FileTreeName>
+          {onAddToChat ? (
+            <FileTreeActions>
+              <button
+                type="button"
+                title="添加到对话"
+                aria-label={`添加到对话：${entry.name}`}
+                className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 group-hover/file:opacity-100"
+                onClick={() => onAddToChat({ path })}
+              >
+                <MessageSquarePlusIcon className="size-3.5" />
+              </button>
+            </FileTreeActions>
+          ) : null}
+        </FileTreeFile>
       );
     });
 
@@ -414,9 +449,11 @@ function FileBrowser({
   if (selectedFile) {
     return (
       <FileContentView
+        key={selectedFile}
         filePath={selectedFile}
         rootPath={rootPath}
         onBack={() => setSelectedFile(undefined)}
+        onAddToChat={onAddToChat}
       />
     );
   }
@@ -479,21 +516,47 @@ function languageForFile(filePath: string): string {
   return EXTENSION_LANGUAGE[extension] ?? "text";
 }
 
+/** markdown 系扩展名：内容视图提供「代码 / 预览」双模式。 */
+function isMarkdownFile(filePath: string): boolean {
+  return /\.(md|markdown|mdx)$/i.test(filePath.split(/[\\/]/).at(-1) ?? "");
+}
+
+/** 单个选段加入对话的长度上限：更长的截断，避免一次塞爆输入引用。 */
+const SNIPPET_MAX_CHARS = 4_000;
+
+/** 选区悬浮按钮的定位与内容；above 表示贴在选区上方，否则贴在下方。 */
+interface SelectionCard {
+  text: string;
+  x: number;
+  y: number;
+  above: boolean;
+}
+
 function FileContentView({
   filePath,
   rootPath,
   onBack,
+  onAddToChat,
 }: {
   filePath: string;
   rootPath: string;
   onBack: () => void;
+  onAddToChat?: (mention: FileMention) => void;
 }) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
+  const isMarkdown = isMarkdownFile(filePath);
+  // markdown 默认渲染预览，可切回源码；其他文件只有代码视图（不显示切换）。
+  const [previewMode, setPreviewMode] = useState(isMarkdown);
   const rootPrefix = rootPath ? `${rootPath.replaceAll("\\", "/")}/` : "";
   const relativePath = rootPrefix && filePath.startsWith(rootPrefix)
     ? filePath.slice(rootPrefix.length)
     : filePath;
+  // 选区悬浮「添加到对话」按钮：定位相对外层包裹（不随内容滚动），
+  // 滚动/选区消失时隐藏。代码与预览两种模式共用同一套处理。
+  const frameRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [selectionCard, setSelectionCard] = useState<SelectionCard | null>(null);
 
   useEffect(() => {
     setContent(undefined);
@@ -513,6 +576,51 @@ function FileContentView({
     };
   }, [filePath]);
 
+  const updateSelectionCard = useCallback(() => {
+    const frame = frameRef.current;
+    const scroll = scrollRef.current;
+    const selection = window.getSelection();
+    const text = selection?.toString() ?? "";
+    if (
+      !onAddToChat ||
+      !frame ||
+      !scroll ||
+      !selection ||
+      selection.isCollapsed ||
+      !text.trim() ||
+      selection.rangeCount === 0 ||
+      !scroll.contains(selection.anchorNode)
+    ) {
+      setSelectionCard(null);
+      return;
+    }
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+    if (!rect.width && !rect.height) {
+      setSelectionCard(null);
+      return;
+    }
+    // 按钮优先浮在选区上方，紧贴顶边时改到下方；水平居中于选区并夹在框内。
+    const above = rect.top - frameRect.top > 34;
+    const width = frameRect.width;
+    const x = Math.min(Math.max(rect.left - frameRect.left + rect.width / 2, 70), Math.max(width - 70, 70));
+    setSelectionCard({
+      text: text.trim().slice(0, SNIPPET_MAX_CHARS),
+      x,
+      y: above
+        ? rect.top - frameRect.top - 4
+        : rect.bottom - frameRect.top + 4,
+      above,
+    });
+  }, [onAddToChat]);
+
+  const acceptSelection = useCallback(() => {
+    if (!selectionCard || !onAddToChat) return;
+    onAddToChat({ path: filePath, snippet: selectionCard.text });
+    window.getSelection()?.removeAllRanges();
+    setSelectionCard(null);
+  }, [selectionCard, onAddToChat, filePath]);
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex shrink-0 items-center gap-1.5">
@@ -522,20 +630,97 @@ function FileContentView({
         <p className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={filePath}>
           {relativePath || filePath}
         </p>
+        {isMarkdown ? (
+          <div className="flex shrink-0 items-center rounded-md border p-0.5" role="group" aria-label="视图模式">
+            <button
+              type="button"
+              aria-pressed={!previewMode}
+              title="代码模式"
+              onClick={() => setPreviewMode(false)}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors",
+                previewMode
+                  ? "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  : "bg-accent text-accent-foreground",
+              )}
+            >
+              <CodeIcon className="size-3" />
+              代码
+            </button>
+            <button
+              type="button"
+              aria-pressed={previewMode}
+              title="预览模式"
+              onClick={() => setPreviewMode(true)}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors",
+                previewMode
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              <EyeIcon className="size-3" />
+              预览
+            </button>
+          </div>
+        ) : null}
+        {onAddToChat ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={() => onAddToChat({ path: filePath })}
+          >
+            <MessageSquarePlusIcon className="size-3.5" />
+            添加到对话
+          </Button>
+        ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/30">
-        {error ? (
-          <EmptyNote text={error} />
-        ) : content === undefined ? (
-          <EmptyNote text="正在加载文件…" />
-        ) : (
-          <CodeBlock
-            code={content}
-            language={languageForFile(filePath) as never}
-            showLineNumbers
-            className="rounded-none border-0 bg-transparent"
-          />
-        )}
+      <div ref={frameRef} className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          className="h-full overflow-auto rounded-md border bg-muted/30"
+          onMouseUp={updateSelectionCard}
+          onScroll={() => setSelectionCard(null)}
+        >
+          {error ? (
+            <EmptyNote text={error} />
+          ) : content === undefined ? (
+            <EmptyNote text="正在加载文件…" />
+          ) : previewMode ? (
+            <div className="p-4 text-sm">
+              <Streamdown>{content}</Streamdown>
+            </div>
+          ) : (
+            <CodeBlock
+              code={content}
+              language={languageForFile(filePath) as never}
+              showLineNumbers
+              className="rounded-none border-0 bg-transparent"
+            />
+          )}
+        </div>
+        {selectionCard ? (
+          <div
+            className={cn(
+              "absolute z-10 flex -translate-x-1/2 items-center",
+              selectionCard.above ? "-translate-y-full" : "translate-y-0",
+            )}
+            style={{ left: selectionCard.x, top: selectionCard.y }}
+          >
+            <button
+              type="button"
+              title="把选中内容添加到对话"
+              // 按下不抢占焦点，避免点击按钮时选区先被清掉
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={acceptSelection}
+              className="flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs shadow-md transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <MessageSquarePlusIcon className="size-3.5" />
+              添加到对话
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,10 +1,11 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
 import { parseWikiHref, splitCronContext } from "@/lib/chat-utils";
 import { friendlyErrorText, rawErrorDetail } from "@/lib/error-display";
 import { prepareAttachments } from "@/lib/attachments";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import {
   Collapsible,
   CollapsibleContent,
@@ -32,6 +33,7 @@ import {
   LoaderCircleIcon,
   SparklesIcon,
   Undo2Icon,
+  XIcon,
 } from "lucide-react";
 import {
   Conversation,
@@ -87,6 +89,37 @@ import { SlashSkillMenu } from "./SlashSkillMenu";
 /** 单个附件的大小上限；PDF/Word/表格以 data URL 形式随消息发送，过大
  * 的文件会显著拖慢请求与每轮重放，超限时在前端直接拦截。 */
 const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+
+/** 输入区引用芯片的一项：整个文件，或文件里选中的一段内容。 */
+export interface FileMention {
+  /** 来源文件路径（工作区相对或项目内绝对路径）。 */
+  path: string;
+  /** 文件内选中的片段；缺省表示引用整个文件。 */
+  snippet?: string;
+}
+
+/** 输入区的命令式接口：右侧文件面板等兄弟组件经 SessionView 持有的 ref
+ *  把文件或选段写入当前草稿的引用列表，不走状态提升（避免整棵会话树重渲染）。 */
+export interface ChatInputApi {
+  /** 把一个文件（或文件中选中的片段）加入输入框的引用芯片行；同路径同片段忽略。 */
+  addFileMention: (mention: FileMention) => void;
+}
+
+/** 文件引用发送时附加到消息文本末尾。与服务端附件落盘的提示同一套路：
+ * 只给模型路径（工作区相对或项目内绝对路径，readFile 均可直接解析），
+ * 由 agent 按需用 readFile 读取——对文本/图片/office/PDF 全类型通用；
+ * 选段以引用块内联，模型无需读文件即可就片段展开讨论。 */
+function buildFileMentionText(mentions: FileMention[]): string {
+  const items = mentions.map((mention) => {
+    if (mention.snippet === undefined) return `- ${mention.path}`;
+    const quoted = mention.snippet
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    return `- ${mention.path}（选中片段）：\n${quoted}`;
+  });
+  return `[用户引用了以下文件内容，需要完整内容时可用 readFile 工具读取对应路径]\n${items.join("\n")}`;
+}
 
 /** 最近一次回合异常结束（且没有文字总结）时的提示。 */
 export interface TurnOutcomeNote {
@@ -214,6 +247,8 @@ export interface ChatPaneProps {
   memoryNotes?: MemoryNoteInfo[];
   /** 「记忆更新」卡片点击后打开右侧面板记忆标签。 */
   onOpenMemory?: () => void;
+  /** 命令式接口挂载点：右侧文件面板「添加到对话」经它写入当前草稿。 */
+  inputApiRef?: RefObject<ChatInputApi | null>;
 }
 
 /** 回合末尾的记忆更新卡：标题行「N 条记忆更新」，展开列出本次沉淀/
@@ -286,6 +321,7 @@ export function ChatPane({
   onStop,
   memoryNotes,
   onOpenMemory,
+  inputApiRef,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -484,6 +520,31 @@ export function ChatPane({
   // 输入以 "/" 开头且光标仍在首词内时弹出；选中后把首词替换为 "/<id> "，
   // 发送时由服务端展开技能正文（历史里保留紧凑的命令文本）。
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // —— 文件面板「添加到对话」的引用芯片 ——
+  // 引用挂在草稿区，随下一条消息一起发送（文本末尾附加路径提示块），
+  // 未发送前可逐个移除；重复添加同一路径/同一选段忽略。
+  const [fileMentions, setFileMentions] = useState<FileMention[]>([]);
+  useEffect(() => {
+    if (!inputApiRef) return;
+    inputApiRef.current = {
+      addFileMention: (mention) => {
+        if (!mention.path) return;
+        setFileMentions((prev) =>
+          prev.some(
+            (item) =>
+              item.path === mention.path && item.snippet === mention.snippet,
+          )
+            ? prev
+            : [...prev, mention],
+        );
+        textareaRef.current?.focus();
+      },
+    };
+    return () => {
+      inputApiRef.current = null;
+    };
+  }, [inputApiRef]);
   const dismissedTokenRef = useRef<string | null>(null);
   const skillsFetchedAtRef = useRef(0);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -718,15 +779,24 @@ export function ChatPane({
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
             onSubmit={async ({ text, files }) => {
-              if (busy || (!text.trim() && files.length === 0)) return;
+              const mentions = fileMentions;
+              const hasText = !!text.trim();
+              if (busy || (!hasText && files.length === 0 && mentions.length === 0)) return;
               setSlash({ open: false, query: "" });
               // 发送前处理附件：压缩大图。其余类型（PDF/Word/表格等）原样
               // 发送，服务端会落盘并把路径告诉模型。
               const prepared = await prepareAttachments(files);
-              if (!text.trim() && prepared.length === 0) return;
+              if (!hasText && prepared.length === 0 && mentions.length === 0) return;
+              // 文件引用以路径提示块附加在文本末尾，随消息一起发出。
+              const finalText =
+                mentions.length > 0
+                  ? hasText
+                    ? `${text}\n\n${buildFileMentionText(mentions)}`
+                    : buildFileMentionText(mentions)
+                  : text;
               void chat.sendMessage(
                 {
-                  text,
+                  text: finalText,
                   ...(prepared.length > 0 ? { files: prepared } : {}),
                 },
                 {
@@ -738,6 +808,7 @@ export function ChatPane({
                   },
                 },
               );
+              setFileMentions([]);
             }}
             maxFileSize={ATTACHMENT_MAX_BYTES}
             onError={(issue) => setAttachmentError(issue.message)}
@@ -757,6 +828,51 @@ export function ChatPane({
               ) : null}
               <PromptInputAttachments />
               <AttachmentVisionHint acceptsImages={modelAcceptsImages} />
+              {fileMentions.length > 0 ? (
+                <div className="flex w-full flex-wrap gap-1.5 px-1 pt-2">
+                  {fileMentions.map((mention) => {
+                    const name = mention.path.split(/[\\/]/).at(-1) ?? mention.path;
+                    const chipKey = mention.snippet
+                      ? `${mention.path}#${mention.snippet}`
+                      : mention.path;
+                    const snippetPreview =
+                      mention.snippet === undefined
+                        ? undefined
+                        : mention.snippet.replaceAll(/\s+/g, " ").trim().slice(0, 24);
+                    return (
+                      <span
+                        key={chipKey}
+                        title={
+                          mention.snippet === undefined
+                            ? mention.path
+                            : `${mention.path}\n选段：${mention.snippet.slice(0, 200)}${mention.snippet.length > 200 ? "…" : ""}`
+                        }
+                        className="flex max-w-64 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs"
+                      >
+                        <FileTypeIcon name={name} className="size-3.5 shrink-0" />
+                        <span className="min-w-0 truncate">{name}</span>
+                        {snippetPreview !== undefined ? (
+                          <span className="min-w-0 max-w-32 truncate text-muted-foreground">
+                            {snippetPreview || "（空选段）"}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          aria-label={`移除引用 ${name}`}
+                          className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          onClick={() =>
+                            setFileMentions((prev) =>
+                              prev.filter((item) => item !== mention),
+                            )
+                          }
+                        >
+                          <XIcon className="size-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
               <PromptInputTextarea
                 ref={textareaRef}
                 placeholder="有什么可以帮忙的？输入 / 选择技能"
@@ -930,25 +1046,20 @@ function AttachmentVisionHint({ acceptsImages }: { acceptsImages?: boolean }) {
 }
 
 function AssistantLoadingView({ effort }: { effort: ReasoningEffort }) {
-  if (effort !== "off") {
-    // 与消息流里的 ThinkingLine 保持一致的一行式占位。
-    return (
-      <div className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-xs text-muted-foreground">
-        <SparklesIcon className="size-3.5 shrink-0" />
-        <Shimmer as="span" duration={1.6}>思考中…</Shimmer>
-      </div>
-    );
-  }
-
-  // Pure CSS animations only: JS-driven ones (motion) freeze whenever the
-  // main thread is busy rendering the stream, which reads as "stuck".
+  // 与助手消息头部的头像行保持一致：AI 头像 + 思考微光文字。图标用 GIF：
+  // 由浏览器解码循环播放，主线程忙于渲染流时不会像 JS 动画（motion）那样冻结。
   return (
-    <div className="flex w-full items-center gap-3 text-sm text-muted-foreground">
-      <LoaderCircleIcon className="size-4 animate-spin" />
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <span className="block h-3 w-40 animate-pulse rounded bg-muted-foreground/25" />
-        <span className="block h-3 max-w-64 animate-pulse rounded bg-muted-foreground/15 [animation-delay:150ms]" />
-      </div>
+    <div className="flex w-full items-center gap-2.5">
+      <img
+        src={`${import.meta.env.BASE_URL}bloub-cercle-attentif-bleu.gif`}
+        alt="AI"
+        draggable={false}
+        className="size-6 shrink-0 select-none object-contain"
+      />
+      <span className="text-sm font-medium text-foreground">Eva AI Agent</span>
+      <Shimmer as="span" duration={1.6} className="text-xs text-muted-foreground">
+        {effort !== "off" ? "思考中…" : "正在回复…"}
+      </Shimmer>
     </div>
   );
 }
