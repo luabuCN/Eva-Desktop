@@ -16,6 +16,8 @@ const subAgentInputSchema = z.object({
   prompt: z.string().trim().min(1).optional(),
   providerId: z.string().trim().nullable().optional(),
   modelId: z.string().trim().nullable().optional(),
+  imageProviderId: z.string().trim().nullable().optional(),
+  imageModelId: z.string().trim().nullable().optional(),
   maxTurns: z.number().int().min(1).max(200).nullable().optional(),
   isActive: z.boolean().optional(),
 });

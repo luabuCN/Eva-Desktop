@@ -46,6 +46,8 @@ export interface RunContextInit {
   updatePermissionMode?: (mode: PermissionMode) => ToolPermissionMap;
   /** Delegate 工具的委派桥；子智能体上下文不带，委派不能再生委派。 */
   delegate?: DelegationBridge;
+  /** generateImage 工具的默认图片模型（子智能体定义固定项）；空 = 自动发现。 */
+  imageModel?: { providerId: string; modelId: string };
   /** bash(runInBackground=true) 的后台任务桥；注册表跨回合存活，子智能体
    * 上下文经派生展开继承（子代理也能查询/等待后台任务）。 */
   backgroundTasks?: BackgroundTaskBridge;

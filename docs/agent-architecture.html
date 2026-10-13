@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenHarness-Desktop · Agent 架构图</title>
+<style>
+  :root {
+    --ink: #1a2233;
+    --muted: #5b6475;
+    --line: #d7dce6;
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --blue: #2f6fed;      --blue-bg: #eaf1fe;   --blue-line: #b9cffa;
+    --green: #1e8e5a;     --green-bg: #e8f7f0;  --green-line: #b3e3cd;
+    --purple: #7a4fd3;    --purple-bg: #f1ebfc; --purple-line: #d4c3f3;
+    --amber: #b97909;     --amber-bg: #fdf3e0;  --amber-line: #f0d9a8;
+    --red: #c23b3b;       --red-bg: #fdecec;    --red-line: #f2c2c2;
+    --gray: #55607a;      --gray-bg: #eef1f6;   --gray-line: #ccd3e0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--ink);
+    padding: 32px 24px 64px; line-height: 1.55;
+  }
+  .page { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  .subtitle { color: #6b7488; font-size: 14px; margin-bottom: 20px; }
+  .subtitle code { background: #e8ecf3; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 26px; font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: #4a5468; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  section { margin-bottom: 40px; }
+  h2 { font-size: 18px; margin-bottom: 4px; display: flex; align-items: baseline; gap: 10px; }
+  h2 .file { font-size: 12px; color: #7a8499; font-family: Consolas, monospace; font-weight: normal; }
+  .section-desc { font-size: 13px; color: #6b7488; margin-bottom: 14px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px; box-shadow: 0 1px 3px rgba(20,30,60,.06);
+  }
+
+  /* ---------- 色彩工具类 ---------- */
+  .b-blue   { background: var(--blue-bg);   border: 1px solid var(--blue-line); }
+  .b-green  { background: var(--green-bg);  border: 1px solid var(--green-line); }
+  .b-purple { background: var(--purple-bg); border: 1px solid var(--purple-line); }
+  .b-amber  { background: var(--amber-bg);  border: 1px solid var(--amber-line); }
+  .b-gray   { background: var(--gray-bg);   border: 1px solid var(--gray-line); }
+  .b-red    { background: var(--red-bg);    border: 1px solid var(--red-line); }
+
+  .node { border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .node b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .node small { color: #5b6478; font-size: 11.5px; display: block; }
+  .node code { font-family: Consolas, monospace; font-size: 11px; background: rgba(255,255,255,.65); padding: 0 4px; border-radius: 3px; }
+
+  .arrow-r { font-size: 18px; color: #98a3b8; align-self: center; padding: 0 2px; flex: none; }
+  .arrow-d { text-align: center; font-size: 17px; color: #98a3b8; line-height: 1.1; margin: 2px 0; }
+
+  /* ---------- ① 进程分层 ---------- */
+  .stack { display: grid; grid-template-columns: 1fr 78px 1.5fr 78px 1fr; align-items: stretch; gap: 0; }
+  .stack .col { display: flex; flex-direction: column; gap: 10px; }
+  .stack .link { display: flex; align-items: center; justify-content: center; color: #98a3b8; font-size: 16px; flex-direction: column; gap: 2px;}
+  .stack .link small { font-size: 10.5px; color: #8a94a8; text-align: center; line-height: 1.3; }
+
+  /* ---------- ② 回合流水线 ---------- */
+  .pipe { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 28px; }
+  .step { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+  .step .no {
+    width: 34px; height: 34px; border-radius: 50%; background: var(--blue); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600;
+  }
+  .step .node { height: 100%; }
+
+  /* ---------- ③ 委派子系统 ---------- */
+  .delegate-wrap { display: grid; grid-template-columns: 1fr 56px 1.6fr 56px 1fr; align-items: center; }
+  .hubbox { border-radius: 10px; padding: 14px; }
+  .hubbox h3 { font-size: 14px; margin-bottom: 8px; }
+  .hubbox ul { list-style: none; font-size: 12px; }
+  .hubbox li { padding: 4px 0 4px 14px; position: relative; color: #444c60; }
+  .hubbox li::before { content: "·"; position: absolute; left: 2px; font-weight: 700; }
+  .vline { display: flex; flex-direction: column; align-items: center; color: #98a3b8; gap: 4px; }
+  .vline .lbl { writing-mode: vertical-lr; font-size: 11px; color: #7a4fd3; letter-spacing: 2px; }
+
+  .tools4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+  .tools4 .node { padding: 8px 10px; }
+
+  /* ---------- ④ 策略链 ---------- */
+  .chain { display: flex; align-items: stretch; gap: 0; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
+  .chain .node { flex: 1; min-width: 130px; font-size: 12px; }
+
+  .warn { border-left: 4px solid var(--red); background: #fff8f8; border-radius: 6px;
+    padding: 10px 14px; font-size: 13px; color: #7c2d2d; margin-top: 18px; }
+  .warn b { color: var(--red); }
+  .warn + .warn { margin-top: 8px; }
+
+  .flowlabel { font-size: 11px; color: #8a94a8; text-align: center; margin: 6px 0; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>OpenHarness-Desktop · Agent 架构图</h1>
+  <div class="subtitle">Mastra 框架 + Tauri 桌面壳 · 生成于 2026-10 · 核心入口 <code>server/src/runtime/agent-runtime.ts#stream()</code></div>
+
+  <div class="legend">
+    <span><i class="dot" style="background:var(--blue-bg);border:1px solid var(--blue-line)"></i>运行时 / 主链路</span>
+    <span><i class="dot" style="background:var(--green-bg);border:1px solid var(--green-line)"></i>工具系统</span>
+    <span><i class="dot" style="background:var(--purple-bg);border:1px solid var(--purple-line)"></i>子智能体（委派）</span>
+    <span><i class="dot" style="background:var(--amber-bg);border:1px solid var(--amber-line)"></i>数据 / 持久层</span>
+    <span><i class="dot" style="background:var(--gray-bg);border:1px solid var(--gray-line)"></i>前端 / 接口层</span>
+    <span><i class="dot" style="background:var(--red-bg);border:1px solid var(--red-line)"></i>已知问题</span>
+  </div>
+
+  <!-- ================= ① 进程分层 ================= -->
+  <section>
+    <h2>① 进程分层 <span class="file">Tauri 壳 → React 前端 ↔ Node 服务端 ↔ SQLite</span></h2>
+    <div class="section-desc">三个进程边界：桌面壳承载窗口，前端消费 AI SDK UIMessage 流，服务端承载全部 Agent 运行时。</div>
+    <div class="card">
+      <div class="stack">
+        <div class="col">
+          <div class="node b-gray"><b>Tauri 桌面壳</b><small><code>src-tauri/</code></small></div>
+          <div class="node b-gray"><b>窗口 / 侧栏导航</b><small>承载内嵌 Web 前端</small></div>
+          <div class="node b-gray"><b>内置终端 / 预览面板</b><small>终端绑定项目根目录</small></div>
+        </div>
+        <div class="link">⇄<small>WebView</small></div>
+        <div class="col">
+          <div class="node b-blue" style="text-align:center"><b>Web 前端（React）</b><small><code>web/src/</code> · 消费 UIMessage 流</small></div>
+          <div class="node b-gray"><b>聊天界面 MessageView</b>
+            <small>subagent 直播卡 · 审批卡 · 计划卡 · usage 面板 · 变更汇总卡</small></div>
+          <div class="node b-gray"><b>设置页</b>
+            <small>Agent 配置 · <b>子智能体（SubAgentDefinition）</b> · 工具开关 · Provider/模型</small></div>
+          <div class="node b-gray"><b>右侧面板</b><small>文件树 · Diff · Git · 终端 · 知识库</small></div>
+        </div>
+        <div class="link">⇄<small>HTTP / SSE</small></div>
+        <div class="col">
+          <div class="node b-blue" style="text-align:center"><b>Node 服务端</b><small><code>server/src/</code> Express</small></div>
+          <div class="node b-blue"><b>routes/*</b><small>chat · agents · subagents · runs · tools · mcp · crons · wiki · memory …</small></div>
+          <div class="node b-amber"><b>Prisma + SQLite</b><small>AgentConfig · SubAgentDefinition · Project · Run · AgentTask · FileChange …</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ② 回合执行链路 ================= -->
+  <section>
+    <h2>② 每回合执行链路 <span class="file">agent-runtime.ts:100 stream() —— 一个会话同一时刻仅一个活跃运行</span></h2>
+    <div class="section-desc">从用户发送一条消息到回合落幕的 10 个阶段；① → ⑩ 顺序执行，⑦ 之后进入流式循环。</div>
+    <div class="card">
+      <div class="pipe">
+        <div class="step"><div class="no">1</div>
+          <div class="node b-blue"><b>解析配置</b><small>AgentConfig 表取主 Agent 定义（内置 default / explore / code）+ 项目默认 Provider/Model → <code>createModel</code></small></div></div>
+        <div class="step"><div class="no">2</div>
+          <div class="node b-blue"><b>运行管控</b><small><code>runService.start</code> 一会话一运行（僵尸记录就地收尾）+ <code>runHub</code> 支持断线重连回放</small></div></div>
+        <div class="step"><div class="no">3</div>
+          <div class="node b-blue"><b>装配 RunContext</b><small>权限模式（confirm / auto_edit / full / plan）+ readOnly + 项目工具授权 + 全局禁用 + planGate + abort 信号</small></div></div>
+        <div class="step"><div class="no">4</div>
+          <div class="node b-purple"><b>创建 DelegationHub（每回合一个）</b><small>定义来自 SubAgentDefinition 表（内置 4 个 + 自定义）；挂到 <code>runContext.delegate</code>，Delegate 工具据此注入</small></div></div>
+        <div class="step"><div class="no">5</div>
+          <div class="node b-blue"><b>创建 BackgroundTaskHub</b><small>bash(runInBackground) 的后端；注册表跨回合存活，本回合只挂通知流</small></div></div>
+        <div class="step"><div class="no">6</div>
+          <div class="node b-green"><b>合成工具集（34 个工具）</b><small>11 个 ToolProvider 经 registry 合并 → 策略过滤 → 审批门 / 计划门包装 → 交给 Mastra Agent（新增 <code>generateImage</code> 图片生成）</small></div></div>
+        <div class="step"><div class="no">7</div>
+          <div class="node b-blue"><b>构建 Mastra Agent</b><small>instructions = Agent 指令 + 深度思考 + plan 指引 + <b>自动委派策略（已修复）</b> + AGENTS.md/CLAUDE.md + 跨会话记忆；skills 注入；TokenLimiter；maxSteps 80/120</small></div></div>
+        <div class="step"><div class="no">8</div>
+          <div class="node b-blue"><b>上下文加工</b><small>附件落盘 attachments/ → 斜杠技能展开 → 超阈值压缩（历史摘要 + 近期消息，失败退回全文）</small></div></div>
+        <div class="step"><div class="no">9</div>
+          <div class="node b-blue"><b>流式输出</b><small><code>agent.stream</code> → UI 流 tee 成两支：客户端分支（断开即止）+ 泵分支（持久化 + runHub 回放）；空闲看门狗 + 错误友好化</small></div></div>
+        <div class="step"><div class="no">10</div>
+          <div class="node b-amber"><b>回合收尾 onFinish</b><small>先存消息再 finish 运行 → 知识库自动总结入队 + 跨会话记忆生成（均后台、失败只记日志）</small></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ③ 委派子系统 ================= -->
+  <section>
+    <h2>③ 子智能体 · 委派子系统 <span class="file">delegation-hub.ts + tools/delegation-provider.ts（PI-Desktop ADR 0089）</span></h2>
+    <div class="section-desc">Delegate 启动即返回、后台运行，DelegateWait 稍后收敛 —— 只有最终报告（截断 12k 字符）回流主上下文。</div>
+    <div class="card">
+      <div class="delegate-wrap">
+        <!-- 主 Agent -->
+        <div>
+          <div class="node b-blue" style="min-height:150px"><b>主 Agent（Mastra）</b>
+            <small>唯一拥有 Delegate 工具的一方；发起后继续自己的独立工作线</small></div>
+          <div class="arrow-d">↑↓</div>
+          <div class="node b-purple"><b>Delegate 工具四件套</b><small>默认启用 · 免审批 · 非变更类</small></div>
+        </div>
+        <!-- 通道 -->
+        <div class="vline"><span>⟶</span><span class="lbl">start / wait / list / stop</span><span>⟵</span></div>
+        <!-- Hub -->
+        <div class="hubbox b-purple">
+          <h3>DelegationHub（每回合实例）</h3>
+          <ul>
+            <li><b>spawn：</b>模型 = 定义固定 Provider/Model &gt; 会话模型（固定失败即报错不回退）；<b>图片模型 = 定义固定项 &gt; 调用参数 &gt; 自动发现</b>（设置页可给内置/自定义子 Agent 手动指定）</li>
+            <li><b>deriveContext 派生子上下文：</b><code>subAgent=true</code>，去掉 askUser / ExitPlanMode / Delegate（<b>委派不能套娃、不能问用户</b>）；planGate 共享引用</li>
+            <li><b>工具 =</b> 定义白名单 ∩ 运行时可用工具；<b>可写性 =</b> 主 Agent 可写 且 白名单含 bash/writeFile/editFile/mkdir</li>
+            <li><b>边界：</b>并发 ≤10 · 记录保留 100 条 · 报告 12k 截断 · 子 Agent 终止永不结束父回合</li>
+            <li><b>中止级联：</b>运行 abort → 全部子 Agent abort；dispose 收尾</li>
+          </ul>
+          <div class="tools4">
+            <div class="node b-purple"><b>Delegate</b><small>后台启动 + 立即返回</small></div>
+            <div class="node b-purple"><b>DelegateWait</b><small>all / any / minCompleted，≤900s</small></div>
+            <div class="node b-purple"><b>DelegateList</b><small>查进度不等待</small></div>
+            <div class="node b-purple"><b>DelegateStop</b><small>停掉运行中的委派</small></div>
+          </div>
+        </div>
+        <!-- 报告通道 -->
+        <div class="vline"><span>⟶</span><span class="lbl">最终报告（12k 截断）</span><span>⟵</span></div>
+        <!-- 子 Agent -->
+        <div>
+          <div class="node b-purple" style="min-height:170px"><b>子 Agent ×N（并行后台）</b>
+            <small>各自独立 Mastra Agent 实例，maxTurns 40–80</small>
+            <small style="margin-top:6px">内置六位：<b>planner（策划：出完整计划 + 素材清单契约）</b>· explorer（快速检索）· code-reviewer（审查）· test-runner（跑测试）· fixer（多文件实现，可写）· <b>artist（美术：generateImage 按清单精确路径生图）</b></small>
+            <small style="margin-top:6px">流式执行 → 每步工具调用推 <code>data-oh:subagent.progress</code> 直播事件给前端折叠卡片</small></div>
+        </div>
+      </div>
+      <div class="flowlabel">SubAgentDefinition 表（内置 4 条启动时 seedBuiltins 刷新 + 设置页自定义行）—— 是唯一的委派定义来源</div>
+    </div>
+  </section>
+
+  <!-- ================= ④ 工具策略链 ================= -->
+  <section>
+    <h2>④ 工具策略解析链 <span class="file">tools/policies.ts —— 后面的覆盖前面的</span></h2>
+    <div class="section-desc">11 个 Provider 声明 descriptor 默认策略，再经五层修正得到最终每个工具的 enabled / requireApproval。</div>
+    <div class="card">
+      <div class="chain">
+        <div class="node b-green"><b>① Provider 默认</b><small>descriptor.defaultPolicy</small></div>
+        <div class="arrow-r">→</div>
+        <div class="node b-green"><b>② 权限模式放宽</b><small>auto_edit：编辑工具免审<br>full：全部免审</small></div>
+        <div class="arrow-r">→</div>
+        <div class="node b-red"><b>③ 硬审批</b><small>gitPush 任何模式都必须审批</small></div>
+        <div class="arrow-r">→</div>
+        <div class="node b-green"><b>④ 只读 Agent</b><small>mutating 工具一律 enabled=false（委派继承此姿态）</small></div>
+        <div class="arrow-r">→</div>
+        <div class="node b-amber"><b>⑤ 项目 "always allow"</b><small>项目级授权覆盖以上</small></div>
+        <div class="arrow-r">→</div>
+        <div class="node b-red"><b>⑥ 全局禁用开关</b><small>工具设置页 kill switch 优先级最高</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ⑤ 委派触发机制 ================= -->
+  <section>
+    <h2>⑤ 委派触发机制与多阶段流水线 <span class="file">agent-runtime.ts（2026-10-13：自动委派 + 游戏流水线实测通过）</span></h2>
+    <div class="card">
+      <div class="node b-green" style="margin-bottom:12px"><b>✅ 自动委派：运行时动态注入"委派策略"</b>
+        <small>主 Agent 默认姿态 = <b>编排者而非实现者</b>；构建类请求（游戏/应用/带素材的交付物）<b>无条件走流水线</b>：① Delegate planner 出完整计划 + 素材清单契约 → ② 同一消息并行 Delegate artist（按清单精确路径生图）+ fixer（按计划写代码）→ ③ DelegateWait 收敛后自行组装验证。目录随定义动态生成，对所有 Agent 生效，停用全部子智能体时整段消失。</small></div>
+      <div class="node b-purple" style="margin-bottom:12px"><b>🎮 实测："生成一个贪吃蛇小游戏"（未提"委派"二字）</b>
+        <small>planner 50s/3 步出计划 → artist 26s/3 步生成三张风格统一素材 → fixer 100s/4 步完成 index.html，主 Agent 仅编排收敛；浏览器实测游戏可玩、素材全部加载成功。</small></div>
+      <div class="warn"><b>遗留：AgentFormSheet 的 subAgents 字段仍是死配置。</b>设置页仍可编辑主 Agent 的 subAgents（那个"探索"子 Agent），但运行时从不读取该字段——真正生效的定义只在"子智能体"区块（SubAgentDefinition 表）。建议后续移除该编辑器避免误导。</div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

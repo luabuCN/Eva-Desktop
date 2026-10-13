@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { DownloadIcon, XIcon } from "lucide-react";
+import { CheckIcon, DownloadIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { downloadImage } from "@/lib/download-image";
 
 interface ImageLightboxProps {
   src: string;
@@ -10,6 +12,25 @@ interface ImageLightboxProps {
 
 /** 全屏图片预览（参考 PI-Desktop）：点遮罩或 ESC 关闭，图片本体不触发关闭。 */
 export function ImageLightbox({ src, filename, open, onOpenChange }: ImageLightboxProps) {
+  // 保存按钮反馈：busy 转圈防重复点击，done 短暂显示对勾。
+  const [saving, setSaving] = useState<"idle" | "busy" | "done">("idle");
+
+  const handleSave = () => {
+    if (saving !== "idle") return;
+    setSaving("busy");
+    void downloadImage(src, filename ?? "image.png")
+      .then((result) => {
+        // 「另存为」里取消：静默复位，不显示完成反馈。
+        if (result === "cancelled") {
+          setSaving("idle");
+          return;
+        }
+        setSaving("done");
+        setTimeout(() => setSaving("idle"), 2000);
+      })
+      .catch(() => setSaving("idle"));
+  };
+
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -31,15 +52,21 @@ export function ImageLightbox({ src, filename, open, onOpenChange }: ImageLightb
               className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
             />
             <div className="absolute -top-3 right-0 flex translate-y-[-100%] items-center gap-1">
-              <a
-                href={src}
-                download={filename ?? "image"}
+              <button
+                type="button"
                 title="保存图片"
                 aria-label="保存图片"
+                onClick={handleSave}
                 className="flex size-8 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
               >
-                <DownloadIcon className="size-4" />
-              </a>
+                {saving === "done" ? (
+                  <CheckIcon className="size-4 text-green-400" />
+                ) : saving === "busy" ? (
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                ) : (
+                  <DownloadIcon className="size-4" />
+                )}
+              </button>
               <button
                 type="button"
                 aria-label="关闭预览"

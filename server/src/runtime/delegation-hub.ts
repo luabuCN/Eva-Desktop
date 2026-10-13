@@ -48,7 +48,7 @@ const MAX_WAIT_SECONDS = 900;
 const MAX_WAIT_RESULT_CHARS = 50_000;
 
 /** Workspace tools that make a delegate write-capable. */
-const MUTATING_TOOL_NAMES = new Set(["bash", "writeFile", "editFile", "mkdir"]);
+const MUTATING_TOOL_NAMES = new Set(["bash", "writeFile", "editFile", "mkdir", "generateImage"]);
 
 type MutableRecord = DelegationRecord & {
   steps: number;
@@ -211,6 +211,14 @@ export class DelegationHub implements DelegationBridge {
       const delegateContext = toolProviderRegistry.deriveContext(this.options.runContext, {
         readOnly: !canMutate,
       });
+      // 定义里的图片模型固定项落到派生上下文：generateImage 按
+      // 调用参数 > 子智能体固定 > 自动发现 的顺序解析默认模型。
+      if (definition.imageProviderId && definition.imageModelId) {
+        delegateContext.imageModel = {
+          providerId: definition.imageProviderId,
+          modelId: definition.imageModelId,
+        };
+      }
       const availableTools = await toolProviderRegistry.createToolSet(delegateContext);
       const tools = Object.fromEntries(
         definition.tools

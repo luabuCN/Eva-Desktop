@@ -218,6 +218,28 @@ class AgentRuntimeService {
         runContext.delegate = delegationHub;
       }
 
+      // 自动委派策略：仅靠 Delegate 工具描述不足以让模型自发委派（系统
+      // 提示的服从性远高于工具描述），必须在指令层给出触发条件。这里运行
+      // 时动态注入而不是写进 agent-defaults：内置定义虽每次启动刷新进库，
+      // 用户自建 agent 不会；注入则对全部 agent 生效，且停用所有子智能体
+      // 时整段消失、不留死指令。
+      const delegationInstructions =
+        subAgentDefinitions.length > 0
+          ? [
+              "Delegation policy: background subagents are available through the Delegate tool — use them proactively on complex tasks, without waiting to be asked.",
+              "Delegation policy: background subagents are available through the Delegate tool — use them proactively on complex tasks, without waiting to be asked. Your default posture is orchestrator, not implementer: when the catalog has a specialist for a stage of the work, hand that stage to a subagent instead of doing it yourself.",
+              "Build requests (make me a game / app / page / tool — anything producing code or generated assets) ALWAYS run as a pipeline, regardless of file count; a single-file game with images is still a pipeline: (1) Delegate the planner for a complete plan with an exact asset manifest; (2) once it reports back, Delegate the executors in parallel in one message — the artist for image assets, the fixer for the code — each briefed with the plan (or its relevant section), never the raw user request; (3) converge with DelegateWait, then assemble, verify and report yourself. Execute a stage yourself only when the catalog has no matching specialist, and say so in the final summary.",
+              "Delegate research and review the same way: sweeping searches or unfamiliar areas → the explorer; an adversarial check of a nontrivial change → the code-reviewer; a long test or build run → the test-runner. Independent directions run in parallel — one Delegate per direction in the same assistant message.",
+              "Keep quick single-file reads, searches and small edits inline — delegation is for work whose scope or parallelism earns it.",
+              "A subagent cannot see this conversation and cannot ask the user: its task brief must be self-contained — goal, paths and facts it cannot infer, constraints, and the exact report you want back. While subagents run, keep working your own line, then converge with DelegateWait. Never end the turn with subagents still running.",
+              "Available subagents:",
+              ...subAgentDefinitions.map(
+                (definition) =>
+                  `- ${definition.name} (tools: ${definition.tools.join(", ")}): ${definition.description}`,
+              ),
+            ].join("\n")
+          : undefined;
+
       // 后台任务中心：bash(runInBackground=true) 的后端。注册表模块级、跨
       // 回合存活；这里只挂 per-run 实例（携带通知流）。必须在
       // createToolSet 之前注入：WorkspaceToolProvider 依据桥是否存在决定
@@ -260,6 +282,7 @@ class AgentRuntimeService {
             ? "Think carefully before acting; reason through edge cases and verify assumptions when useful."
             : undefined,
           planModeInstructions,
+          delegationInstructions,
           projectDocs ? projectDocsSection(projectDocs) : undefined,
           memorySection || undefined,
         ]

@@ -57,6 +57,7 @@ import {
   usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { cn } from "@/lib/utils";
 import type {
   ApprovalAction,
   PlanApprovalAction,
@@ -74,6 +75,15 @@ import type {
   SkillInfo,
 } from "@/api";
 import { ingestConversationToWiki, listChangesSince, listSkills, revertChangesSince } from "@/api";
+import {
+  ASPECT_RATIOS,
+  DEFAULT_IMAGE_GEN_OPTIONS,
+  generateImages,
+  inferCountFromPrompt,
+  inferRatioFromPrompt,
+  isImageGenPrompt,
+  type ImageGenOptions,
+} from "@/lib/image-gen";
 import { MessageView } from "./MessageView";
 import { FileLinkContext, MessageLinkContext, WikiLinkContext } from "./ai-elements/message";
 import { ConversationMinimap } from "./ConversationMinimap";
@@ -85,6 +95,7 @@ import { AskUserPrompt } from "./AskUserPrompt";
 import { PlanApprovalPrompt } from "./PlanApprovalPrompt";
 import { PermissionModeSelector } from "./PermissionModeSelector";
 import { SlashSkillMenu } from "./SlashSkillMenu";
+import { ImageGenControls } from "./ImageGenControls";
 
 /** 单个附件的大小上限；PDF/Word/表格以 data URL 形式随消息发送，过大
  * 的文件会显著拖慢请求与每轮重放，超限时在前端直接拦截。 */
@@ -249,6 +260,9 @@ export interface ChatPaneProps {
   onOpenMemory?: () => void;
   /** 命令式接口挂载点：右侧文件面板「添加到对话」经它写入当前草稿。 */
   inputApiRef?: RefObject<ChatInputApi | null>;
+  /** 直出生图提交后与完成后各调一次：驱动侧栏「最近」即时出现/更新
+   *  该会话（普通对话走 useChat onFinish，直出端点绕过它需单独触发）。 */
+  onImageGenFinished?: () => void;
 }
 
 /** 回合末尾的记忆更新卡：标题行「N 条记忆更新」，展开列出本次沉淀/
@@ -322,6 +336,7 @@ export function ChatPane({
   memoryNotes,
   onOpenMemory,
   inputApiRef,
+  onImageGenFinished,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -389,6 +404,97 @@ export function ChatPane({
     editBusyRef.current = busy;
     setEditBusy(busy);
   };
+
+  // —— 图像生成模式 ——
+  // chip 切换输入区为生图参数行；提交不经 agent 循环，直出端点出图后把
+  // user/assistant 两条消息追加进会话（服务端已整体持久化）。切换会话时
+  // 复位模式并中止在途请求，避免参数与结果串会话。
+  const [imageMode, setImageMode] = useState(false);
+  const imageModeRef = useRef(false);
+  imageModeRef.current = imageMode;
+  const [imageOptions, setImageOptions] = useState<ImageGenOptions>(DEFAULT_IMAGE_GEN_OPTIONS);
+  const [imageBusy, setImageBusy] = useState(false);
+  const imageBusyRef = useRef(false);
+  const imageAbortRef = useRef<AbortController | null>(null);
+  // 生成中的占位动画快照：提交时按参数行 + 提示词关键词预推一次张数/比例
+  // （与服务端同规则），避免生成中再改参数行导致占位块数量/形状跳动。
+  const [imagePending, setImagePending] = useState<{ count: number; ratio: string } | null>(null);
+  useEffect(() => {
+    setImageMode(false);
+    setImageBusy(false);
+    setImagePending(null);
+    imageAbortRef.current?.abort();
+    imageAbortRef.current = null;
+  }, [chat.id]);
+
+  /** 图像提交：直出端点出图，完成后把服务端持久化的两条新消息本地追加。
+   *  options 缺省用参数行状态；普通对话自动识别触发的提交传纯默认值
+   *  （全参数按提示词关键词推断），避免沿用此前手动调过的参数。 */
+  const submitImageGen = useCallback(
+    async (text: string, options?: ImageGenOptions) => {
+      const opts = options ?? imageOptions;
+      const prompt = text.trim();
+      const chatNow = chatRef.current;
+      if (!prompt || imageBusyRef.current) return;
+      setSlash({ open: false, query: "" });
+      const controller = new AbortController();
+      imageAbortRef.current = controller;
+      imageBusyRef.current = true;
+      setImageBusy(true);
+      setImagePending({
+        count:
+          opts.count > 0
+            ? opts.count
+            : (inferCountFromPrompt(prompt) ?? 1),
+        ratio:
+          opts.ratio !== "auto"
+            ? opts.ratio
+            : (inferRatioFromPrompt(prompt) ?? "auto"),
+      });
+      // 乐观展示用户消息：直出端点没有流式过程，等响应再追加会让消息
+      // “消失”十几秒。成功后用服务端持久化的正式两条替换（服务端 user
+      // 消息的 id 与本地不同，直接追加会重复），失败/中止则回滚。
+      const baseMessages = chatNow.messages;
+      chatNow.setMessages([
+        ...baseMessages,
+        { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: prompt }] },
+      ]);
+      // 服务端在生图前已把会话入库，稍作延迟刷新让侧栏「最近」即时出现
+      // 该对话；完成后再刷一次更新时间/标题。
+      const refreshTimer = window.setTimeout(() => onImageGenFinished?.(), 400);
+      try {
+        const result = await generateImages(
+          {
+            id: chatNow.id,
+            messages: baseMessages,
+            prompt,
+            model: opts.model ?? undefined,
+            ratio: opts.ratio,
+            style: opts.style,
+            count: opts.count,
+            projectId,
+          },
+          controller.signal,
+        );
+        chatNow.setMessages([...baseMessages, ...result.messages]);
+      } catch (cause) {
+        chatNow.setMessages(baseMessages);
+        if (!controller.signal.aborted) {
+          setAttachmentError(
+            cause instanceof Error ? cause.message : "图片生成失败，请重试",
+          );
+        }
+      } finally {
+        window.clearTimeout(refreshTimer);
+        if (imageAbortRef.current === controller) imageAbortRef.current = null;
+        imageBusyRef.current = false;
+        setImageBusy(false);
+        setImagePending(null);
+        onImageGenFinished?.();
+      }
+    },
+    [imageOptions, projectId, onImageGenFinished],
+  );
 
   /** 截断 + 重发：撤回（可选）→ 移除该消息之后的一切并替换文本 → regenerate。 */
   const resendEdited = useCallback(
@@ -579,8 +685,13 @@ export function ChatPane({
   }, [slash.open, slash.query, skills]);
   const slashMenuOpen = slash.open && filteredSkills.length > 0;
 
-  // 输入变化/光标移动时重新判定触发词。
+  // 输入变化/光标移动时重新判定触发词。图像生成模式下没有技能语义，
+  // 斜杠菜单保持关闭。
   const syncSlash = useCallback((el: HTMLTextAreaElement) => {
+    if (imageModeRef.current) {
+      setSlash((prev) => (prev.open ? { open: false, query: "" } : prev));
+      return;
+    }
     const pos = el.selectionStart ?? el.value.length;
     const token = el.value.slice(0, pos);
     if (token.startsWith("/") && !/\s/.test(token)) {
@@ -719,6 +830,9 @@ export function ChatPane({
               ))
             )}
             {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
+            {imagePending ? (
+                          <ImageGenPendingView count={imagePending.count} ratio={imagePending.ratio} />
+                        ) : null}
             {!busy && turnNote ? <TurnNoteView note={turnNote} /> : null}
             {!busy && error ? <AssistantErrorView message={error} /> : null}
           </ConversationContent>
@@ -779,6 +893,18 @@ export function ChatPane({
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
             onSubmit={async ({ text, files }) => {
+              // 图像生成模式：不经 agent 循环，直出端点出图（附件/引用不携带）。
+              if (imageMode) {
+                await submitImageGen(text);
+                return;
+              }
+              // 普通对话的生图意图自动识别：命中高置信信号（“画一只猫”“生成
+              // 两张海报”“油画风格插画”）时改走直出，参数全自动按关键词推断，
+              // 不切换图像模式——后续对话仍走正常 agent 循环。
+              if (isImageGenPrompt(text)) {
+                await submitImageGen(text, DEFAULT_IMAGE_GEN_OPTIONS);
+                return;
+              }
               const mentions = fileMentions;
               const hasText = !!text.trim();
               if (busy || (!hasText && files.length === 0 && mentions.length === 0)) return;
@@ -875,7 +1001,7 @@ export function ChatPane({
               ) : null}
               <PromptInputTextarea
                 ref={textareaRef}
-                placeholder="有什么可以帮忙的？输入 / 选择技能"
+                placeholder={imageMode ? "描述你想要的图片" : "有什么可以帮忙的？输入 / 选择技能"}
                 onChange={handleTextareaEvent}
                 onClick={handleTextareaEvent}
                 onKeyUp={handleTextareaEvent}
@@ -888,47 +1014,77 @@ export function ChatPane({
               {/* 参考 ZCode 的两端布局：左侧是附件与上下文选择，右侧是
                   模型与发送；窗口缩窄时左组自动换行，右组固定不换行。 */}
               <PromptInputTools className="flex-wrap">
-                <PromptInputActionMenu>
-                  <PromptInputActionMenuTrigger
-                    tooltip="添加附件"
-                    className="size-7 rounded-md"
+                {imageMode ? (
+                  <ImageGenControls
+                    providers={providers}
+                    value={imageOptions}
+                    onChange={setImageOptions}
+                    onExit={() => setImageMode(false)}
                   />
-                  <PromptInputActionMenuContent>
-                    <PromptInputActionAddAttachments />
-                    <PromptInputActionMenuItem onSelect={openSlashFromMenu}>
-                      <SparklesIcon className="mr-2 size-4" />
-                      输入 / 选择技能
-                    </PromptInputActionMenuItem>
-                  </PromptInputActionMenuContent>
-                </PromptInputActionMenu>
-                <PermissionModeSelector
-                  value={permissionMode}
-                  onChange={onPermissionModeChange}
-                />
-                <AgentSelector value={agentId} onChange={onAgentChange} />
-                <ProjectSelector
-                  projects={projects}
-                  projectId={projectId}
-                  onSelectProject={onProjectChange}
-                  onChanged={onProjectCreated}
-                />
-                <SaveToWikiButton
-                  conversationId={chat.id}
-                  projectId={projectId}
-                  disabled={chat.messages.length === 0}
-                />
+                ) : (
+                  <>
+                    <PromptInputActionMenu>
+                      <PromptInputActionMenuTrigger
+                        tooltip="添加附件"
+                        className="size-7 rounded-md"
+                      />
+                      <PromptInputActionMenuContent>
+                        <PromptInputActionAddAttachments />
+                        <PromptInputActionMenuItem onSelect={openSlashFromMenu}>
+                          <SparklesIcon className="mr-2 size-4" />
+                          输入 / 选择技能
+                        </PromptInputActionMenuItem>
+                      </PromptInputActionMenuContent>
+                    </PromptInputActionMenu>
+                    <button
+                      type="button"
+                      title="图像生成"
+                      onClick={() => {
+                        setSlash({ open: false, query: "" });
+                        setImageMode(true);
+                        textareaRef.current?.focus();
+                      }}
+                      className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    >
+                      <ImageIcon className="size-3.5 shrink-0" />
+                      图像生成
+                    </button>
+                    <PermissionModeSelector
+                      value={permissionMode}
+                      onChange={onPermissionModeChange}
+                    />
+                    <AgentSelector value={agentId} onChange={onAgentChange} />
+                    <ProjectSelector
+                      projects={projects}
+                      projectId={projectId}
+                      onSelectProject={onProjectChange}
+                      onChanged={onProjectCreated}
+                    />
+                    <SaveToWikiButton
+                      conversationId={chat.id}
+                      projectId={projectId}
+                      disabled={chat.messages.length === 0}
+                    />
+                  </>
+                )}
               </PromptInputTools>
               <div className="flex shrink-0 items-center gap-1.5">
-                <ModelSelector
-                  providers={providers}
-                  value={displaySelection}
-                  onChange={onSelectionChange}
-                  effort={reasoningEffort}
-                  onEffortChange={onReasoningEffortChange}
-                />
+                {imageMode ? null : (
+                  <ModelSelector
+                    providers={providers}
+                    value={displaySelection}
+                    onChange={onSelectionChange}
+                    effort={reasoningEffort}
+                    onEffortChange={onReasoningEffortChange}
+                  />
+                )}
                 <PromptInputSubmit
-                  status={chat.status}
-                  onStop={onStop ?? (() => void chat.stop())}
+                  status={imageBusy ? "submitted" : chat.status}
+                  onStop={
+                    imageBusy
+                      ? () => imageAbortRef.current?.abort()
+                      : (onStop ?? (() => void chat.stop()))
+                  }
                   className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
                 />
               </div>
@@ -1060,6 +1216,41 @@ function AssistantLoadingView({ effort }: { effort: ReasoningEffort }) {
       <Shimmer as="span" duration={1.6} className="text-xs text-muted-foreground">
         {effort !== "off" ? "思考中…" : "正在回复…"}
       </Shimmer>
+    </div>
+  );
+}
+
+/** 图像生成直出中的占位视图：顶行加载文案 + 按即将生成的张数/比例绘制
+ *  占位卡片网格（扫光 + 图标呼吸），与结果卡网格同构——完成后原位替换为
+ *  真实图片。张数/比例在提交时预推（显式参数优先，自动档读提示词关键词）。 */
+function ImageGenPendingView({ count, ratio }: { count: number; ratio: string }) {
+  const aspect = ASPECT_RATIOS.find((entry) => entry.id === ratio)?.ratio ?? 1;
+  return (
+    <div className="w-full max-w-2xl space-y-2">
+      <div className="flex w-full items-center gap-2.5">
+        <img
+          src={`${import.meta.env.BASE_URL}bloub-cercle-attentif-bleu.gif`}
+          alt="AI"
+          draggable={false}
+          className="size-6 shrink-0 select-none object-contain"
+        />
+        <span className="text-sm font-medium text-foreground">Eva AI Agent</span>
+        <Shimmer as="span" duration={1.6} className="text-xs text-muted-foreground">
+          正在生成图片…
+        </Shimmer>
+      </div>
+      <div className={cn("gap-2", count > 1 ? "grid grid-cols-2" : "flex")}>
+        {Array.from({ length: count }, (_, index) => (
+          <div
+            key={index}
+            className="relative flex w-full items-center justify-center overflow-hidden rounded-md border bg-muted/40"
+            style={{ aspectRatio: String(aspect) }}
+          >
+            <ImageIcon className="size-6 animate-pulse text-muted-foreground/50" />
+            <span className="oh-imagegen-sweep" aria-hidden />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

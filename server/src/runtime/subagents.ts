@@ -4,8 +4,9 @@ import { prisma } from "../db.js";
  * 委派式子智能体（参考 PI-Desktop ADR 0062/0089）：主 Agent 通过 Delegate
  * 工具把一段自包含任务交给后台运行的子 Agent，只有最终报告回到主上下文。
  *
- * 定义有两个来源，都落在这张表里：内置四条（explorer / code-reviewer /
- * test-runner / fixer，启动时刷新核心字段），以及设置页创建的自定义行。
+ * 定义有两个来源，都落在这张表里：内置六条（planner / explorer /
+ * code-reviewer / test-runner / fixer / artist，启动时刷新核心字段），
+ * 以及设置页创建的自定义行。
  * 工具白名单在 service 层校验；可写工具（bash/writeFile/editFile/mkdir/git*）
  * 决定子 Agent 派生上下文是否可写。
  */
@@ -18,6 +19,9 @@ export interface SubAgentDefinitionInfo {
   prompt: string;
   providerId?: string | null;
   modelId?: string | null;
+  /** generateImage 工具的固定图片模型；空 = 运行时自动发现。 */
+  imageProviderId?: string | null;
+  imageModelId?: string | null;
   maxTurns?: number | null;
   isActive: boolean;
   isBuiltIn: boolean;
@@ -32,6 +36,8 @@ export interface SubAgentDefinitionInput {
   prompt?: string;
   providerId?: string | null;
   modelId?: string | null;
+  imageProviderId?: string | null;
+  imageModelId?: string | null;
   maxTurns?: number | null;
   isActive?: boolean;
 }
@@ -41,6 +47,50 @@ export interface SubAgentDefinitionInput {
 export const BUILTIN_SUBAGENTS: ReadonlyArray<
   Omit<SubAgentDefinitionInfo, "id" | "createdAt" | "updatedAt">
 > = [
+  {
+    name: "planner",
+    description:
+      "Turn a fuzzy build request into a complete, self-contained implementation plan: mechanics, exact asset paths, file layout, acceptance criteria. Use as the FIRST stage of any large build (a game, an app, a multi-part deliverable) before implementation starts.",
+    tools: ["readFile", "listFiles", "glob", "grep"],
+    prompt: [
+      "You are the Planner — the first stage of a build pipeline. The main agent",
+      "delegates a raw idea or feature request; you return one complete plan the",
+      "next stages can execute without further decisions.",
+      "",
+      "- Look at the workspace enough to ground the plan (existing structure,",
+      "  conventions, anything reusable). Do not over-research: the plan, not a",
+      "  code survey, is the deliverable.",
+      "- Scope honestly to what the task names; propose concrete mechanics, screens",
+      "  or sections, and controls — not generic bullet points.",
+      "- Default to a single self-contained HTML file for games and small tools",
+      "  unless the task or workspace clearly says otherwise.",
+      "- The asset manifest is a contract: list every image with its EXACT relative",
+      "  path (e.g. assets/snake-head.png), a one-line description, and the shared",
+      "  style. The artist generates exactly these paths; the code references",
+      "  exactly these paths. Never let the two sides invent their own names.",
+      "",
+      "Report in this shape:",
+      "",
+      "<summary>",
+      "2-3 sentences: what will be built and the approach.",
+      "</summary>",
+      "<assets>",
+      "- assets/<name>.png — what it depicts; shared style: <one consistent style phrase>",
+      "(omit this section when the build needs no generated images)",
+      "</assets>",
+      "<files>",
+      "- <path>: what lives there and its responsibilities",
+      "</files>",
+      "<acceptance>",
+      "- How to verify the build works (run it, click through, checks that pass)",
+      "</acceptance>",
+    ].join("\n"),
+    providerId: null,
+    modelId: null,
+    maxTurns: 30,
+    isActive: true,
+    isBuiltIn: true,
+  },
   {
     name: "explorer",
     description:
@@ -157,6 +207,45 @@ export const BUILTIN_SUBAGENTS: ReadonlyArray<
     isActive: true,
     isBuiltIn: true,
   },
+  {
+    name: "artist",
+    description:
+      "Generate image assets (game sprites, icons, backgrounds, illustrations) with generateImage and save them at the exact paths a plan specifies. Use as the asset stage of a build pipeline, after the planner and in parallel with code implementation.",
+    tools: ["readFile", "listFiles", "generateImage"],
+    prompt: [
+      "You are the Artist — the asset stage of a build pipeline. The task names a",
+      "plan (usually the planner's report) with an asset manifest; you produce",
+      "every listed image at exactly the listed path.",
+      "",
+      "- The manifest's paths and style are a contract: same path, same style",
+      "  phrase in every prompt, so the set looks like one product.",
+      "- Write a precise prompt per asset: subject, composition, orientation,",
+      "  palette, and the shared style wording from the manifest.",
+      "- Generate each asset with generateImage at its exact filePath; verify with",
+      "  listFiles that the file exists before reporting it done.",
+      "- When the manifest is missing or ambiguous, choose sensible paths under",
+      "  assets/ and a coherent style yourself — do not stall, and say what you",
+      "  chose.",
+      "- If no image model is available (the tool errors about model discovery),",
+      "  report that plainly and list the assets still missing — never claim a",
+      "  file you could not create.",
+      "",
+      "Report in this shape:",
+      "",
+      "<assets>",
+      "- assets/<name>.png — generated: what it depicts, model used",
+      "</assets>",
+      "<missing>",
+      "- paths that failed or were skipped, with the reason",
+      "(omit when nothing is missing)",
+      "</missing>",
+    ].join("\n"),
+    providerId: null,
+    modelId: null,
+    maxTurns: 40,
+    isActive: true,
+    isBuiltIn: true,
+  },
 ];
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -179,6 +268,8 @@ function serialize(row: {
   prompt: string;
   providerId: string | null;
   modelId: string | null;
+  imageProviderId: string | null;
+  imageModelId: string | null;
   maxTurns: number | null;
   isActive: boolean;
   isBuiltIn: boolean;
@@ -193,6 +284,8 @@ function serialize(row: {
     prompt: row.prompt,
     providerId: row.providerId,
     modelId: row.modelId,
+    imageProviderId: row.imageProviderId,
+    imageModelId: row.imageModelId,
     maxTurns: row.maxTurns,
     isActive: row.isActive,
     isBuiltIn: row.isBuiltIn,
@@ -201,13 +294,17 @@ function serialize(row: {
   };
 }
 
-async function validateModelPin(providerId: string | null | undefined, modelId: string | null | undefined) {
+async function validateModelPin(
+  providerId: string | null | undefined,
+  modelId: string | null | undefined,
+  label = "固定模型",
+) {
   if (!providerId && !modelId) return;
   if (!providerId || !modelId) {
-    throw new Error("固定模型的供应商和模型必须同时设置");
+    throw new Error(`${label}的供应商和模型必须同时设置`);
   }
   const provider = await prisma.provider.findUnique({ where: { id: providerId } });
-  if (!provider?.isActive) throw new Error("固定模型的供应商不存在或未启用");
+  if (!provider?.isActive) throw new Error(`${label}的供应商不存在或未启用`);
 }
 
 class SubAgentService {
@@ -240,6 +337,7 @@ class SubAgentService {
       throw new Error(`子智能体 "${name}" 已存在`);
     }
     await validateModelPin(input.providerId, input.modelId);
+    await validateModelPin(input.imageProviderId, input.imageModelId, "图片生成模型");
     const row = await prisma.subAgentDefinition.create({
       data: {
         name,
@@ -248,6 +346,8 @@ class SubAgentService {
         prompt: input.prompt.trim(),
         providerId: input.providerId || null,
         modelId: input.providerId ? input.modelId || null : null,
+        imageProviderId: input.imageProviderId || null,
+        imageModelId: input.imageProviderId ? input.imageModelId || null : null,
         maxTurns: normalizeMaxTurns(input.maxTurns),
         isActive: input.isActive ?? true,
       },
@@ -280,6 +380,18 @@ class SubAgentService {
           ? null
           : input.modelId || null;
     await validateModelPin(providerId, modelId);
+    // 图片模型固定项与思考模型固定项同语义：成对设置、清供应商即整体清除。
+    const imageProviderId =
+      input.imageProviderId === undefined
+        ? current.imageProviderId
+        : input.imageProviderId || null;
+    const imageModelId =
+      input.imageModelId === undefined
+        ? current.imageModelId
+        : input.imageProviderId !== undefined && !input.imageProviderId
+          ? null
+          : input.imageModelId || null;
+    await validateModelPin(imageProviderId, imageModelId, "图片生成模型");
 
     const row = await prisma.subAgentDefinition.update({
       where: { id },
@@ -292,6 +404,8 @@ class SubAgentService {
         ...(input.prompt !== undefined ? { prompt: input.prompt.trim() } : {}),
         providerId,
         modelId,
+        imageProviderId,
+        imageModelId,
         ...(input.maxTurns !== undefined ? { maxTurns: normalizeMaxTurns(input.maxTurns) } : {}),
         ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
       },
@@ -333,7 +447,12 @@ class SubAgentService {
 }
 
 function onlyActivation(input: SubAgentDefinitionInput): boolean {
-  return Object.keys(input).every((key) => key === "isActive");
+  // 内置定义的角色字段（提示词/工具等）不可改；isActive 与图片模型固定项
+  // 属于运行配置，与"启用"同级别放行——内置 artist 也要能换生图模型。
+  return Object.keys(input).every(
+    (key) =>
+      key === "isActive" || key === "imageProviderId" || key === "imageModelId",
+  );
 }
 
 function normalizeMaxTurns(value: number | null | undefined): number | null {

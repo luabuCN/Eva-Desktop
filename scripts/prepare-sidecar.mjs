@@ -103,4 +103,27 @@ fs.mkdirSync(binariesDir, { recursive: true });
 fs.copyFileSync(sidecarPath, path.join(binariesDir, `open-harness-sidecar-${target}${extension}`));
 fs.chmodSync(path.join(binariesDir, `open-harness-sidecar-${target}${extension}`), 0o755);
 
+// Prisma 查询引擎不进 bundle：把 dll.node 复制到 sidecar exe 的每个落点
+// 旁（SEA 运行时由 env.ts 定位并指向）。target/debug 是 tauri dev 的运行
+// 目录；src-tauri/binaries 的副本经 bundle.resources 随安装包分发。
+const pnpmDir = path.join(root, "node_modules", ".pnpm");
+const enginesDirName = fs
+  .readdirSync(pnpmDir)
+  .find((name) => name.startsWith("@prisma+engines@"));
+if (!enginesDirName) throw new Error("@prisma/engines not found in node_modules/.pnpm");
+const enginesDir = path.join(pnpmDir, enginesDirName, "node_modules", "@prisma", "engines");
+const engineFile = fs
+  .readdirSync(enginesDir)
+  .find((name) => /^((lib)?query_engine-.+\.(dll|so|dylib)\.node)$/.test(name));
+if (!engineFile) throw new Error(`Prisma query engine not found in ${enginesDir}`);
+const engineSource = path.join(enginesDir, engineFile);
+for (const destination of [
+  path.dirname(sidecarPath),
+  binariesDir,
+  path.join(root, "src-tauri", "target", "debug"),
+]) {
+  fs.mkdirSync(destination, { recursive: true });
+  fs.copyFileSync(engineSource, path.join(destination, engineFile));
+}
+
 console.log(`Prepared Tauri sidecar for ${target}`);

@@ -100,6 +100,25 @@ export interface TurnChangesData {
   }>;
 }
 
+/** 对话内直出生图的结果卡（data-oh:imagegen），渲染成图片网格。
+ *  只存工作区相对路径，回放时经 resolveFilePath + filePreviewUrl 运行时
+ *  拼地址——持久化完整 URL 会在端口/工作区根变化后失效。 */
+export interface ImageGenData {
+  /** 用户原始提示词。 */
+  prompt: string;
+  /** 拼接风格后缀后的最终提示词。 */
+  finalPrompt?: string;
+  /** "Provider/modelId"。 */
+  model: string;
+  ratio: string;
+  style: string;
+  files: Array<{
+    /** 工作区相对路径（正斜杠）。 */
+    path: string;
+    bytes: number;
+  }>;
+}
+
 export type ChatUIMessage = UIMessage<
   unknown,
   {
@@ -118,6 +137,7 @@ export type ChatUIMessage = UIMessage<
     "oh:retry": { attempt: number; reason: string };
     "oh:preview.open": PreviewOpenData;
     "oh:changes": TurnChangesData;
+    "oh:imagegen": ImageGenData;
   }
 >;
 

@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* streamdown（对话 Markdown 渲染）装在 node_modules，类名是它运行时输出的
+ * 字符串，Tailwind v4 的自动内容检测不扫 node_modules，必须显式声明来源，
+ * 否则代码块工具栏的 -mt-10 等类不会生成，按钮浮层会独占一行造成大片空白。 */
+@source "../node_modules/streamdown/dist";
+
 @custom-variant dark (&:is(.dark *));
 
 @font-face {
@@ -315,8 +320,32 @@
   }
 }
 
+/* 图像生成占位卡：高光从左向右扫过，配合卡片内图标的 pulse 表示生成中 */
+.oh-imagegen-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 25%,
+    color-mix(in oklab, var(--foreground) 7%, transparent) 50%,
+    transparent 75%
+  );
+  transform: translateX(-100%);
+  animation: oh-imagegen-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes oh-imagegen-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .oh-session-dot {
+    animation: none;
+  }
+
+  .oh-imagegen-sweep {
     animation: none;
   }
 }

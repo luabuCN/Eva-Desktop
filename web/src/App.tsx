@@ -887,6 +887,7 @@ function SessionView({
           memoryNotes={memoryNotes}
           onOpenMemory={handleOpenMemory}
           inputApiRef={chatInputApiRef}
+          onImageGenFinished={onFinished}
         />
         {panelOpen ? (
           <div

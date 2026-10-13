@@ -41,7 +41,12 @@ const TOOL_CHOICES = [
   "writeFile",
   "editFile",
   "mkdir",
+  "generateImage",
 ] as const;
+
+/** 图片模型家族命名特征，与服务端 image-provider 的自动发现保持一致。 */
+const IMAGE_MODEL_PATTERN =
+  /(gpt-image|dall-e|cogview|seedream|seededit|qwen-image|hunyuan-image|flux|stable-diffusion|\bsd3\b|wanx|jimeng|image-generation)/i;
 
 interface SubAgentFormSheetProps {
   open: boolean;
@@ -69,6 +74,8 @@ export function SubAgentFormSheet({
   const [isActive, setIsActive] = useState(true);
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
+  const [imageProviderId, setImageProviderId] = useState("");
+  const [imageModelId, setImageModelId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -82,24 +89,32 @@ export function SubAgentFormSheet({
     setIsActive(initial?.isActive ?? true);
     setProviderId(copyOf ? "" : initial?.providerId ?? "");
     setModelId(copyOf ? "" : initial?.modelId ?? "");
+    setImageProviderId(copyOf ? "" : initial?.imageProviderId ?? "");
+    setImageModelId(copyOf ? "" : initial?.imageModelId ?? "");
     setError(undefined);
   }, [initial, copyOf, open]);
 
   const activeProviders = providers.filter((provider) => provider.isActive);
   const selectedProvider = activeProviders.find((provider) => provider.id === providerId);
+  const selectedImageProvider = activeProviders.find(
+    (provider) => provider.id === imageProviderId,
+  );
+  /** 内置定义的受限编辑：角色字段锁定，仅开放运行配置（启用/图片模型）。 */
+  const builtin = !!initial?.isBuiltIn && !copyOf;
 
   function toggleTool(tool: string) {
+    if (builtin) return;
     setTools((current) =>
       current.includes(tool) ? current.filter((entry) => entry !== tool) : [...current, tool],
     );
   }
 
   async function save() {
-    if (!name.trim() || !description.trim() || !prompt.trim()) {
+    if (!builtin && (!name.trim() || !description.trim() || !prompt.trim())) {
       setError("名称、描述和系统提示词为必填项");
       return;
     }
-    if (tools.length === 0) {
+    if (!builtin && tools.length === 0) {
       setError("至少选择一个工具");
       return;
     }
@@ -107,16 +122,23 @@ export function SubAgentFormSheet({
     setError(undefined);
     try {
       const parsedTurns = Number.parseInt(maxTurns, 10);
-      const payload = {
-        name: name.trim(),
-        description: description.trim(),
-        prompt: prompt.trim(),
-        tools,
-        maxTurns: Number.isFinite(parsedTurns) && parsedTurns > 0 ? parsedTurns : null,
-        isActive,
-        providerId: providerId || null,
-        modelId: providerId ? modelId || null : null,
+      const imagePin = {
+        imageProviderId: imageProviderId || null,
+        imageModelId: imageProviderId ? imageModelId || null : null,
       };
+      const payload = builtin
+        ? { isActive, ...imagePin }
+        : {
+            name: name.trim(),
+            description: description.trim(),
+            prompt: prompt.trim(),
+            tools,
+            maxTurns: Number.isFinite(parsedTurns) && parsedTurns > 0 ? parsedTurns : null,
+            isActive,
+            providerId: providerId || null,
+            modelId: providerId ? modelId || null : null,
+            ...imagePin,
+          };
       if (initial && !copyOf) await updateSubAgent(initial.id, payload);
       else await createSubAgent(payload);
       onSaved();
@@ -133,7 +155,13 @@ export function SubAgentFormSheet({
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle>
-            {initial && !copyOf ? `编辑子智能体 ${initial.name}` : copyOf ? `复制为自定义子智能体` : "创建子智能体"}
+            {builtin
+              ? `配置内置子智能体 ${initial?.name}`
+              : initial && !copyOf
+                ? `编辑子智能体 ${initial.name}`
+                : copyOf
+                  ? "复制为自定义子智能体"
+                  : "创建子智能体"}
           </DialogTitle>
         </DialogHeader>
 
@@ -144,6 +172,7 @@ export function SubAgentFormSheet({
               <Input
                 id="subagent-name"
                 value={name}
+                disabled={builtin}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="例如 translator、doc-writer"
               />
@@ -155,6 +184,7 @@ export function SubAgentFormSheet({
                 id="subagent-description"
                 className="min-h-16"
                 value={description}
+                disabled={builtin}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="一句话说明这个子智能体擅长什么、主 Agent 应在什么情况下委派。"
               />
@@ -175,7 +205,9 @@ export function SubAgentFormSheet({
                         selected
                           ? "border-primary/60 bg-primary/10 text-foreground"
                           : "text-muted-foreground hover:bg-accent",
+                        builtin && "cursor-not-allowed opacity-60",
                       )}
+                      disabled={builtin}
                     >
                       {selected ? "✓ " : ""}
                       {tool}
@@ -193,6 +225,7 @@ export function SubAgentFormSheet({
                 id="subagent-prompt"
                 className="min-h-48 font-mono text-xs"
                 value={prompt}
+                disabled={builtin}
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder="这个子智能体的角色指令：职责、约束、以及最终报告的格式。"
               />
@@ -205,6 +238,7 @@ export function SubAgentFormSheet({
               <div className="grid gap-2 sm:grid-cols-2">
                 <Select
                   value={providerId || NONE_MODEL}
+                  disabled={builtin}
                   onValueChange={(next) => {
                     setProviderId(next === NONE_MODEL ? "" : next);
                     setModelId("");
@@ -225,7 +259,7 @@ export function SubAgentFormSheet({
                 <Select
                   value={modelId || NONE_MODEL}
                   onValueChange={(next) => setModelId(next === NONE_MODEL ? "" : next)}
-                  disabled={!providerId}
+                  disabled={builtin || !providerId}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="选择模型" />
@@ -247,6 +281,60 @@ export function SubAgentFormSheet({
               <FieldDescription>可为简单任务固定便宜/快速的模型，把贵模型留给复杂分析。</FieldDescription>
             </Field>
             <Field>
+              <FieldLabel>图片生成模型</FieldLabel>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Select
+                  value={imageProviderId || NONE_MODEL}
+                  onValueChange={(next) => {
+                    setImageProviderId(next === NONE_MODEL ? "" : next);
+                    setImageModelId("");
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="选择供应商" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_MODEL}>自动发现</SelectItem>
+                    {activeProviders.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={imageModelId || NONE_MODEL}
+                  onValueChange={(next) => setImageModelId(next === NONE_MODEL ? "" : next)}
+                  disabled={!imageProviderId}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="选择模型" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={NONE_MODEL}>自动发现</SelectItem>
+                    <SelectGroup>
+                      {(selectedImageProvider?.models ?? [])
+                        .filter((model) => model.enabled)
+                        .sort(
+                          (a, b) =>
+                            Number(IMAGE_MODEL_PATTERN.test(b.id)) -
+                            Number(IMAGE_MODEL_PATTERN.test(a.id)),
+                        )
+                        .map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.name}
+                            {IMAGE_MODEL_PATTERN.test(model.id) ? "（图片）" : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <FieldDescription>
+                仅在工具白名单含 generateImage 时生效：固定后该子智能体的生图默认走此模型（调用参数可临时覆盖）；不固定则按命名特征自动发现。
+              </FieldDescription>
+            </Field>
+            <Field>
               <FieldLabel htmlFor="subagent-maxturns">轮次上限</FieldLabel>
               <Input
                 id="subagent-maxturns"
@@ -254,6 +342,7 @@ export function SubAgentFormSheet({
                 min={1}
                 max={200}
                 value={maxTurns}
+                disabled={builtin}
                 onChange={(event) => setMaxTurns(event.target.value)}
               />
               <FieldDescription>超过后以 truncated 状态返回最后报告；留空或 0 视为不限。</FieldDescription>

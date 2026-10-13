@@ -64,6 +64,7 @@ type ModelEditorState = {
   name: string;
   modalities: ModelModalities;
   tool_call: boolean;
+  reasoning: boolean;
   contextLimit?: number;
 };
 
@@ -114,6 +115,7 @@ const createModelEditorState = (model?: ProviderModel): ModelEditorState => ({
   name: model?.name ?? "",
   modalities: normalizeModalities(model?.modalities),
   tool_call: !!model?.tool_call,
+  reasoning: !!model?.reasoning,
   contextLimit: model?.limit?.context,
 });
 
@@ -217,6 +219,7 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
         isCustom: true,
         modalities: nextModalities,
         tool_call: editorState.tool_call,
+        reasoning: editorState.reasoning,
         limit: nextLimit,
       };
       void persist([newModel, ...models]);
@@ -230,6 +233,7 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
                 name: modelName,
                 modalities: nextModalities,
                 tool_call: editorState.tool_call,
+                reasoning: editorState.reasoning,
                 limit: nextLimit,
               }
             : model,
@@ -449,6 +453,15 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
                   checked={editorState.tool_call}
                   onCheckedChange={(checked) =>
                     setEditorState((current) => ({ ...current, tool_call: !!checked }))
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-xs text-muted-foreground">推理</span>
+                <Switch
+                  checked={editorState.reasoning}
+                  onCheckedChange={(checked) =>
+                    setEditorState((current) => ({ ...current, reasoning: !!checked }))
                   }
                 />
               </div>

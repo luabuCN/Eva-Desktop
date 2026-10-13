@@ -3,6 +3,7 @@ use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::ShellExt;
 
 struct SidecarChild(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
@@ -22,6 +23,34 @@ fn set_close_behavior(
     }
     *state.0.lock().map_err(|error| error.to_string())? = behavior;
     Ok(())
+}
+
+/// 保存图片到用户选择的位置：弹系统「另存为」对话框，默认定位系统下载
+/// 目录并预填文件名，用户取消返回 false。Rust 侧直接写文件，不引入
+/// fs 插件及其路径 scope（webview 里 attachment 下载只会触发 WebView2
+/// 自带的保存弹窗，无法控制默认目录与完成反馈，故走自定义命令）。
+#[tauri::command]
+fn save_image_with_dialog(
+    app: tauri::AppHandle,
+    bytes: Vec<u8>,
+    file_name: String,
+) -> Result<bool, String> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp"])
+        .set_file_name(&file_name);
+    if let Ok(downloads) = app.path().download_dir() {
+        dialog = dialog.set_directory(downloads);
+    }
+    let Some(target) = dialog.blocking_save_file() else {
+        return Ok(false);
+    };
+    let path = target
+        .into_path()
+        .map_err(|_| "不支持的保存位置".to_string())?;
+    std::fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -44,7 +73,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![set_close_behavior])
+        .invoke_handler(tauri::generate_handler![set_close_behavior, save_image_with_dialog])
         .on_window_event(|window, event| {
             // 关闭行为为 tray 时拦截关闭，仅隐藏窗口；quit 时走默认关闭流程
             // （最后一个窗口关闭即退出应用，RunEvent::Exit 会带走 sidecar）。

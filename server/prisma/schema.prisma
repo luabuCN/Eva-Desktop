@@ -140,6 +140,8 @@ model AgentConfig {
 
 /// 委派式子智能体定义（Delegate 工具的后端目录）。内置四条随启动刷新
 /// 核心字段；自定义行完全由用户所有。name 是模型调用时的 agent 参数。
+/// providerId/modelId 固定的是思考模型；imageProviderId/imageModelId
+/// 固定的是 generateImage 工具用的图片模型（仅白名单含该工具时有意义）。
 model SubAgentDefinition {
   id          String   @id @default(uuid())
   name        String   @unique
@@ -148,6 +150,8 @@ model SubAgentDefinition {
   prompt      String
   providerId  String?
   modelId     String?
+  imageProviderId String?
+  imageModelId    String?
   maxTurns    Int?
   isActive    Boolean  @default(true)
   isBuiltIn   Boolean  @default(false)

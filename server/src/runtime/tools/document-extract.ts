@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PDFParse } from "pdf-parse";
 import JSZip from "jszip";
 
 /**
@@ -92,7 +91,32 @@ function extractHtml(html: string): string {
     .replace(/[ \t]+\n/g, "\n");
 }
 
+/**
+ * pdf-parse（pdfjs-dist）模块初始化时会探测浏览器全局（DOMMatrix /
+ * ImageData / Path2D）。普通 Node 的 ESM 加载路径能容忍缺失；sidecar 的
+ * SEA/CJS 打包把探测变成顶层引用，缺全局即崩（服务器都无法启动）。这里
+ * 惰性加载：真正解析 PDF 时才初始化模块，并先注入最小桩满足探测——桩不
+ * 参与文本提取，仅让初始化通过。
+ */
+let pdfParseModule: typeof import("pdf-parse") | undefined;
+
+async function loadPdfParse(): Promise<typeof import("pdf-parse")> {
+  if (!pdfParseModule) {
+    const globals = globalThis as {
+      DOMMatrix?: unknown;
+      ImageData?: unknown;
+      Path2D?: unknown;
+    };
+    globals.DOMMatrix ??= class DOMMatrix {};
+    globals.ImageData ??= class ImageData {};
+    globals.Path2D ??= class Path2D {};
+    pdfParseModule = await import("pdf-parse");
+  }
+  return pdfParseModule;
+}
+
 async function extractPdf(bytes: Buffer): Promise<string> {
+  const { PDFParse } = await loadPdfParse();
   const parser = new PDFParse({ data: bytes });
   try {
     const result = await parser.getText();

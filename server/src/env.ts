@@ -26,6 +26,33 @@ if (!process.env.DATABASE_URL) {
   process.env.DATABASE_URL = `file:${databaseFile}?connection_limit=1`;
 }
 
+/**
+ * SEA 打包的 sidecar 里 Prisma 找不到查询引擎：esbuild bundle 不携带
+ * *.dll.node，Prisma 只会去 node_modules 结构里搜（打包后不存在）。
+ * prepare-sidecar.mjs 把引擎复制到 exe 同目录（打包版在 Tauri resources
+ * 的 binaries/ 下），这里在首个 Prisma 查询前显式指向它。开发环境走
+ * node_modules 原生解析，不受影响。
+ */
+function locateQueryEngine(): string | undefined {
+  if (process.env.PRISMA_QUERY_ENGINE_LIBRARY) return process.env.PRISMA_QUERY_ENGINE_LIBRARY;
+  const exeDir = path.dirname(process.execPath);
+  const candidates = [exeDir, path.join(exeDir, "binaries"), path.join(exeDir, "resources")];
+  for (const dir of candidates) {
+    try {
+      const hit = fs
+        .readdirSync(dir)
+        .find((name) => /^((lib)?query_engine-.+\.(dll|so|dylib)\.node)$/.test(name));
+      if (hit) return path.join(dir, hit);
+    } catch {
+      // 目录不存在即跳过。
+    }
+  }
+  return undefined;
+}
+
+const queryEngine = locateQueryEngine();
+if (queryEngine) process.env.PRISMA_QUERY_ENGINE_LIBRARY = queryEngine;
+
 /** 模型流空闲超时（毫秒）：连接保持但超过该时长没有任何分片时，判定
  * 提供方挂起并自动中止回合（这类挂起不会让请求“失败”，maxRetries 无从
  * 触发）。非法值回落默认 240 秒。 */

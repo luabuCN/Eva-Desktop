@@ -318,6 +318,23 @@ class AgentTaskService {
     });
   }
 
+  /**
+   * 运行落幕后的系统级收尾：会话同一时刻只允许一个活跃运行，运行结束
+   * （完成/失败/中止）后仍处于 in_progress 的任务不可能再有人推进，统一
+   * 退回 pending，避免任务面板永远挂着「进行中」。模型下一回合可按状态机
+   * 重新标记。这不是模型发起的流转，不走 assertTransition。
+   */
+  async resetStaleTasks(conversationId?: string): Promise<number> {
+    const result = await prisma.agentTask.updateMany({
+      where: {
+        status: "in_progress",
+        ...(conversationId ? { conversationId } : {}),
+      },
+      data: { status: "pending", updatedAt: new Date() },
+    });
+    return result.count;
+  }
+
   private findTask(
     db: PrismaTransaction | typeof prisma,
     conversationId: string,

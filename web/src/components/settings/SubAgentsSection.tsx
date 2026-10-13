@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Copy, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Bot, Copy, Loader2, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 
 import {
   deleteSubAgent,
@@ -124,14 +124,34 @@ export function SubAgentsSection() {
                     <p className="text-xs text-muted-foreground">
                       工具：{entry.tools.join(" / ")}
                       {model ? ` · 固定 ${provider?.name} / ${model.name}` : ""}
+                      {entry.imageProviderId && entry.imageModelId
+                        ? ` · 生图 ${
+                            providers.find((item) => item.id === entry.imageProviderId)?.name ??
+                            entry.imageProviderId
+                          } / ${entry.imageModelId}`
+                        : ""}
                       {entry.maxTurns ? ` · 上限 ${entry.maxTurns} 轮` : ""}
                     </p>
                   </ItemContent>
-                  <ItemActions>
+                    <ItemActions>
                     <Switch
                       checked={entry.isActive}
                       onCheckedChange={(checked) => void toggleActive(entry, !!checked)}
                     />
+                    {entry.isBuiltIn ? (
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        title="配置运行项（启用 / 图片生成模型）"
+                        onClick={() => {
+                          setEditing(entry);
+                          setCopying(null);
+                          setFormOpen(true);
+                        }}
+                      >
+                        <Settings2 size={14} />
+                      </Button>
+                    ) : null}
                     <Button
                       variant="outline"
                       size="icon-sm"

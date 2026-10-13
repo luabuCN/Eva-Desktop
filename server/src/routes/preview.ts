@@ -106,9 +106,13 @@ previewRoutes.get("/*", async (c) => {
   const ext = path.extname(resolved).toLowerCase().replace(".", "");
   const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
   const stream = Readable.toWeb(createReadStream(resolved)) as unknown as ReadableStream<Uint8Array>;
+  // ?download=1 强制作为附件下载（前端跨端口时 <a download> 属性不生效）。
+  const download = c.req.query("download");
+  const filename = encodeURIComponent(path.basename(resolved));
   return c.body(stream, 200, {
     "Content-Type": contentType,
     "Cache-Control": "no-cache",
     "X-Content-Type-Options": "nosniff",
+    ...(download ? { "Content-Disposition": `attachment; filename*=UTF-8''${filename}` } : {}),
   });
 });

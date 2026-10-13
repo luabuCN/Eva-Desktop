@@ -304,6 +304,9 @@ export interface SubAgentDefinitionInfo {
   prompt: string;
   providerId?: string | null;
   modelId?: string | null;
+  /** generateImage 工具的固定图片模型；空 = 自动发现。 */
+  imageProviderId?: string | null;
+  imageModelId?: string | null;
   maxTurns?: number | null;
   isActive: boolean;
   isBuiltIn: boolean;
@@ -318,6 +321,8 @@ export interface SubAgentDefinitionInput {
   prompt?: string;
   providerId?: string | null;
   modelId?: string | null;
+  imageProviderId?: string | null;
+  imageModelId?: string | null;
   maxTurns?: number | null;
   isActive?: boolean;
 }

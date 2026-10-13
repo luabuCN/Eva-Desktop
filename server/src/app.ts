@@ -9,6 +9,7 @@ import { cronRoutes } from "./routes/crons.js";
 import { fileRoutes } from "./routes/files.js";
 import { gitRoutes } from "./routes/git.js";
 import { healthRoutes } from "./routes/health.js";
+import { imageRoutes } from "./routes/images.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { providerRoutes } from "./routes/providers.js";
@@ -73,6 +74,7 @@ app.route("/api/git", gitRoutes);
 app.route("/api/changes", changeRoutes);
 app.route("/api/wiki", wikiRoutes);
 app.route("/api/memory", memoryRoutes);
+app.route("/api/images", imageRoutes);
 app.route("/api/chat", chatRoutes);
 // 内置浏览器面板的静态预览（工作区/项目内文件，按原始字节返回）
 app.route("/preview", previewRoutes);

@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { sessionRepository } from "../repositories/session-repository.js";
+import { taskService } from "./task-service.js";
 import type { ChatUIMessage } from "../chat-types.js";
 import type { ModelSelection } from "../providers/provider-service.js";
 import {
@@ -423,6 +424,14 @@ class ThreadRunService {
         completedAt: new Date(),
       },
     });
+
+    // 运行落幕后收尾任务面板：遗留的 in_progress 退回 pending。失败只记
+    // 日志，不影响运行状态本身已落库。
+    try {
+      await taskService.resetStaleTasks(existing.conversationId);
+    } catch (resetError) {
+      console.error("[tasks] failed to reset in_progress tasks after run finish", resetError);
+    }
   }
 
   async updateStatus(runId: string, status: "running" | "waiting_approval") {

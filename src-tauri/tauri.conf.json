@@ -39,6 +39,9 @@
     "externalBin": [
       "binaries/open-harness-sidecar"
     ],
+    "resources": [
+      "binaries/query_engine-windows.dll.node"
+    ],
     "macOS": {
       "signingIdentity": "-"
     }

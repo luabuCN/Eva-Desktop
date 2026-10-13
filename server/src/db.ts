@@ -342,6 +342,8 @@ export async function ensureSchema() {
       "prompt" TEXT NOT NULL,
       "providerId" TEXT,
       "modelId" TEXT,
+      "imageProviderId" TEXT,
+      "imageModelId" TEXT,
       "maxTurns" INTEGER,
       "isActive" BOOLEAN NOT NULL DEFAULT true,
       "isBuiltIn" BOOLEAN NOT NULL DEFAULT false,
@@ -355,6 +357,13 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "SubAgentDefinition_isActive_idx" ON "SubAgentDefinition" ("isActive")',
   );
+  // 旧库补列：图片生成模型固定项（generateImage 工具的默认模型）。
+  await addColumnIfMissing(`
+    ALTER TABLE "SubAgentDefinition" ADD COLUMN "imageProviderId" TEXT
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "SubAgentDefinition" ADD COLUMN "imageModelId" TEXT
+  `);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "SkillRecord" (
       "key" TEXT NOT NULL PRIMARY KEY,
@@ -601,6 +610,12 @@ export async function ensureSchema() {
       error: "Interrupted by sidecar restart",
       completedAt: new Date(),
     },
+  });
+  // 重启前被标成 in_progress 的任务同样不再有人推进，一并退回 pending
+  //（AgentTask.updatedAt 在 updateMany 下显式落值，与 schema @updatedAt 对齐）。
+  await prisma.agentTask.updateMany({
+    where: { status: "in_progress" },
+    data: { status: "pending", updatedAt: new Date() },
   });
   // 服务重启遗留的 processing 总结任务回到队列，避免卡死整个串行队列。
   await prisma.wikiIngestJob.updateMany({

@@ -6,6 +6,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
   CopyIcon,
+  DownloadIcon,
   FileMinusIcon,
   FilePenIcon,
   FilePlusIcon,
@@ -55,7 +56,13 @@ import {
   WebSearchResults,
 } from "@/components/ai-elements/web-results";
 import { ImageLightbox } from "@/components/ImageLightbox";
+import { filePreviewUrl, resolveFilePath } from "@/api";
+import { downloadImage } from "@/lib/download-image";
 import { cn } from "@/lib/utils";
+import {
+  aspectRatioLabel,
+  imageStyleLabel,
+} from "@/lib/image-gen";
 import {
   formatDuration,
   messageText,
@@ -64,6 +71,7 @@ import {
   type BgTaskEventData,
   type ChatUIMessage,
   type CronContextInfo,
+  type ImageGenData,
   type SubagentEventData,
   type ToolPart,
   type TurnChangesData,
@@ -1254,6 +1262,132 @@ function TurnChangesCard({ data }: { data: TurnChangesData }) {
   );
 }
 
+/** 对话内直出生图的结果卡（data-oh:imagegen）：图片网格 + 参数摘要。
+ *  data part 只存工作区相对路径，这里运行时解析为 /preview 地址——历史
+ *  回放不受端口与工作区根变化影响。悬停出现下载按钮，点击放大 Lightbox。 */
+function ImageGenResultView({ data }: { data: ImageGenData }) {
+  const files = useMemo(() => data.files ?? [], [data.files]);
+  const [sources, setSources] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<{ src: string; filename: string } | null>(null);
+  // 每张图独立的下载状态：busy 转圈防重复点击，done 短暂显示对勾作反馈。
+  const [downloads, setDownloads] = useState<Record<string, "busy" | "done">>({});
+
+  const handleDownload = (src: string, filename: string, key: string) => {
+    if (downloads[key]) return;
+    setDownloads((prev) => ({ ...prev, [key]: "busy" }));
+    const settle = (state?: "done") => {
+      setDownloads((prev) => {
+        const next = { ...prev };
+        if (state) next[key] = state;
+        else delete next[key];
+        return next;
+      });
+    };
+    void downloadImage(src, filename)
+      .then((result) => {
+        // 用户在「另存为」里取消是正常路径，静默复位、不显示完成反馈。
+        if (result === "cancelled") {
+          settle();
+          return;
+        }
+        settle("done");
+        setTimeout(() => settle(), 2000);
+      })
+      .catch(() => settle());
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      files.map(async (file) => {
+        try {
+          const absolute = await resolveFilePath(file.path);
+          return [file.path, filePreviewUrl(absolute)] as const;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<string, string> = {};
+      for (const entry of entries) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setSources(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [files]);
+
+  return (
+    <div className="w-full max-w-2xl space-y-1.5">
+      <div className={cn("gap-2", files.length > 1 ? "grid grid-cols-2" : "flex")}>
+        {files.map((file) => {
+          const src = sources[file.path];
+          const filename = file.path.split("/").at(-1) ?? file.path;
+          if (!src) {
+            return (
+              <div
+                key={file.path}
+                className="flex aspect-video items-center justify-center rounded-md border bg-muted/40 text-[11px] text-muted-foreground"
+              >
+                图片不可用（{filename}）
+              </div>
+            );
+          }
+          return (
+            <div key={file.path} className="group relative">
+              <button
+                type="button"
+                title="点击预览"
+                className="block w-full cursor-zoom-in rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => setPreview({ src, filename })}
+              >
+                <img
+                  src={src}
+                  alt={data.prompt}
+                  className="w-full rounded-md border object-cover"
+                />
+              </button>
+              <button
+                type="button"
+                title={`下载 ${filename}`}
+                aria-label={`下载 ${filename}`}
+                onClick={() => handleDownload(src, filename, file.path)}
+                className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-md bg-background/80 text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                {downloads[file.path] === "done" ? (
+                  <CheckIcon className="size-3.5 text-green-600" />
+                ) : downloads[file.path] === "busy" ? (
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <DownloadIcon className="size-3.5" />
+                )}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <p
+        className="text-[11px] text-muted-foreground"
+        title={data.finalPrompt && data.finalPrompt !== data.prompt ? data.finalPrompt : data.prompt}
+      >
+        {data.model} · {aspectRatioLabel(data.ratio)} · {imageStyleLabel(data.style)}
+        {files.length > 1 ? ` · ${files.length} 张` : ""}
+      </p>
+      <ImageLightbox
+        src={preview?.src ?? ""}
+        filename={preview?.filename}
+        open={preview !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreview(null);
+        }}
+      />
+    </div>
+  );
+}
+
 function DataPartView({ part }: { part: DataPart }): ReactNode {
   switch (part.type) {
     // data-oh:subagent.* 在 collapseSubagentParts 里已折叠为 DelegationCard。
@@ -1278,6 +1412,8 @@ function DataPartView({ part }: { part: DataPart }): ReactNode {
       );
     case "data-oh:changes":
       return <TurnChangesCard data={part.data} />;
+    case "data-oh:imagegen":
+      return <ImageGenResultView data={part.data} />;
     default:
       return null;
   }
